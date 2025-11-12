@@ -101,9 +101,12 @@ class AmazonQStreamHandler:
                 if not event_info:
                     continue
 
-                # 记录收到的事件类型
+                # 记录收到的事件类型(仅非 assistantResponseEvent)
                 event_type = event_info.get('event_type')
-                logger.info(f"收到 Amazon Q 事件: {event_type}")
+                if event_type != 'assistantResponseEvent':
+                    logger.info(f"收到 Amazon Q 事件: {event_type}")
+                else:
+                    logger.debug(f"收到 Amazon Q 事件: {event_type}")
 
                 # 记录完整的事件信息（调试级别）
                 import json

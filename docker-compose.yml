@@ -1,3 +1,16 @@
+# ==============================================================================
+# Docker Compose Configuration for Amazon Q to Claude API Proxy
+# ==============================================================================
+#
+# 使用说明:
+# 1. 复制 .env.multi_account.example 为 .env
+# 2. 填写账号配置
+# 3. 启动服务: docker compose up -d
+# 4. 查看日志: docker compose logs -f
+# 5. 停止服务: docker compose down
+#
+# ==============================================================================
+
 version: '3.8'
 
 services:
@@ -6,23 +19,51 @@ services:
     container_name: amq2api
     ports:
       - "${PORT:-8080}:8080"
+    env_file:
+      - .env
     environment:
-      - AMAZONQ_REFRESH_TOKEN=${AMAZONQ_REFRESH_TOKEN}
-      - AMAZONQ_CLIENT_ID=${AMAZONQ_CLIENT_ID}
-      - AMAZONQ_CLIENT_SECRET=${AMAZONQ_CLIENT_SECRET}
-      - AMAZONQ_PROFILE_ARN=${AMAZONQ_PROFILE_ARN}
+      # 全局配置
       - PORT=${PORT:-8080}
       - AMAZONQ_API_ENDPOINT=${AMAZONQ_API_ENDPOINT:-https://q.us-east-1.amazonaws.com/}
       - AMAZONQ_TOKEN_ENDPOINT=${AMAZONQ_TOKEN_ENDPOINT:-https://oidc.us-east-1.amazonaws.com/token}
+      - ZERO_INPUT_TOKEN_MODELS=${ZERO_INPUT_TOKEN_MODELS:-haiku}
+
+      # 多账号配置
+      - AMAZONQ_ACCOUNT_COUNT=${AMAZONQ_ACCOUNT_COUNT:-0}
+
+      # 负载均衡
+      - LOAD_BALANCE_STRATEGY=${LOAD_BALANCE_STRATEGY:-weighted_round_robin}
+
+      # 熔断器
+      - CIRCUIT_BREAKER_ENABLED=${CIRCUIT_BREAKER_ENABLED:-true}
+      - CIRCUIT_BREAKER_ERROR_THRESHOLD=${CIRCUIT_BREAKER_ERROR_THRESHOLD:-5}
+      - CIRCUIT_BREAKER_RECOVERY_TIMEOUT=${CIRCUIT_BREAKER_RECOVERY_TIMEOUT:-300}
+
+      # 健康检查
+      - HEALTH_CHECK_INTERVAL=${HEALTH_CHECK_INTERVAL:-300}
+
+      # 单账号模式配置(当 AMAZONQ_ACCOUNT_COUNT=0 或未设置时使用)
+      - AMAZONQ_REFRESH_TOKEN=${AMAZONQ_REFRESH_TOKEN:-}
+      - AMAZONQ_CLIENT_ID=${AMAZONQ_CLIENT_ID:-}
+      - AMAZONQ_CLIENT_SECRET=${AMAZONQ_CLIENT_SECRET:-}
+      - AMAZONQ_PROFILE_ARN=${AMAZONQ_PROFILE_ARN:-}
     volumes:
-      - token_cache:/home/appuser
+      # Token 缓存和日志持久化
+      - token_cache:/home/appuser/.cache/amazonq
+      - ./logs:/app/logs
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
       interval: 30s
-      timeout: 3s
+      timeout: 10s
       retries: 3
-      start_period: 5s
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   token_cache:
+    driver: local

@@ -4,11 +4,23 @@
 
 ## 功能特性
 
+### 核心功能
 - ✅ 完整的 Claude API 兼容接口
 - ✅ 自动 Token 刷新机制
 - ✅ SSE 流式响应支持
 - ✅ 请求/响应格式自动转换
 - ✅ 完善的错误处理和日志
+
+### 多账号支持 🆕
+- ✅ **任意数量账号** - 通过环境变量配置多个 Amazon Q 账号
+- ✅ **智能负载均衡** - 支持轮询、加权轮询、最少使用、随机四种策略
+- ✅ **自动故障转移** - 账号出错时自动切换到其他可用账号
+- ✅ **熔断保护** - 自动隔离故障账号,定时恢复
+- ✅ **Prometheus 监控** - 完整的指标采集和可视化
+- ✅ **管理 API** - 实时查看账号状态,手动启用/禁用账号
+- ✅ **向后兼容** - 完全兼容单账号配置方式
+
+> 📖 **详细文档:** 查看 [MULTI_ACCOUNT.md](MULTI_ACCOUNT.md) 了解多账号配置和使用
 
 ## 架构说明
 
@@ -49,7 +61,10 @@ docker compose up -d
 curl http://localhost:8080/health
 ```
 
-📖 **详细的 Docker 部署文档：[DOCKER_DEPLOY.md](DOCKER_DEPLOY.md)**
+📖 **Docker 部署文档:**
+- [5 分钟快速上手](DOCKER_QUICK_START.md) - 最简部署指南
+- [完整部署指南](DOCKER_DEPLOYMENT.md) - 详细配置和故障排查
+- [镜像构建发布](BUILD_AND_PUSH.md) - 发布到 Docker Hub
 
 ### 本地部署
 
