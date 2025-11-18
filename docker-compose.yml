@@ -15,8 +15,8 @@ services:
       - AMAZONQ_API_ENDPOINT=${AMAZONQ_API_ENDPOINT:-https://q.us-east-1.amazonaws.com/}
       - AMAZONQ_TOKEN_ENDPOINT=${AMAZONQ_TOKEN_ENDPOINT:-https://oidc.us-east-1.amazonaws.com/token}
     volumes:
-      - token_cache:/home/appuser
-      - db_data:/app/data
+      - ./data/token_cache:/home/appuser
+      - ./data/db_data:/app/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
@@ -24,7 +24,3 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
-
-volumes:
-  token_cache:
-  db_data:
