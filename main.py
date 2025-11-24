@@ -480,6 +480,13 @@ async def create_gemini_message(request: Request):
             project=project_id
         )
 
+        # 打印请求体（调试用）
+        import json
+        logger.info("=" * 80)
+        logger.info("Gemini 请求体:")
+        logger.info(json.dumps(gemini_request, indent=2, ensure_ascii=False))
+        logger.info("=" * 80)
+
         # 获取认证头
         auth_headers = await token_manager.get_auth_headers()
 

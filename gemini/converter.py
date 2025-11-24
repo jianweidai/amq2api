@@ -100,9 +100,22 @@ def convert_claude_to_gemini(claude_req: ClaudeRequest, project: str) -> Dict[st
 
     # 添加 system instruction
     if claude_req.system:
+        # 处理 system 字段（可能是字符串或列表）
+        if isinstance(claude_req.system, str):
+            # 简单字符串格式
+            system_parts = [{"text": claude_req.system}]
+        elif isinstance(claude_req.system, list):
+            # 列表格式，提取所有 text 内容
+            system_parts = []
+            for item in claude_req.system:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    system_parts.append({"text": item.get("text", "")})
+        else:
+            system_parts = [{"text": str(claude_req.system)}]
+
         gemini_request["request"]["systemInstruction"] = {
             "role": "user",
-            "parts": [{"text": claude_req.system}]
+            "parts": system_parts
         }
 
     # 添加工具
@@ -132,7 +145,7 @@ def map_claude_model_to_gemini(claude_model: str) -> str:
     supported_models = {
         "gemini-2.5-flash", "gemini-2.5-flash-thinking", "gemini-2.5-pro",
         "gemini-3-pro-low", "gemini-3-pro-high", "gemini-2.5-flash-lite",
-        "gemini-2.5-flash-image", "gemini-3-pro-image",
+        "gemini-2.5-flash-image", "gemini-2.5-flash-image",
         "claude-sonnet-4-5", "claude-sonnet-4-5-thinking",
         "gpt-oss-120b-medium"
     }
@@ -166,13 +179,71 @@ def convert_tools(claude_tools: List[Any]) -> List[Dict[str, Any]]:
     gemini_tools = []
 
     for tool in claude_tools:
+        # 清理 JSON Schema，移除 Gemini 不支持的字段
+        parameters = clean_json_schema(tool.input_schema)
+
         gemini_tool = {
             "functionDeclarations": [{
                 "name": tool.name,
                 "description": tool.description,
-                "parameters": tool.input_schema
+                "parameters": parameters
             }]
         }
         gemini_tools.append(gemini_tool)
 
     return gemini_tools
+
+
+def clean_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    清理 JSON Schema，移除 Gemini 不支持的字段，并将验证要求追加到 description
+
+    Args:
+        schema: 原始 JSON Schema
+
+    Returns:
+        清理后的 JSON Schema
+    """
+    if not isinstance(schema, dict):
+        return schema
+
+    # 需要移除的验证字段
+    validation_fields = {
+        "minLength": "minLength",
+        "maxLength": "maxLength",
+        "minimum": "minimum",
+        "maximum": "maximum",
+        "minItems": "minItems",
+        "maxItems": "maxItems",
+    }
+
+    # 需要完全移除的字段
+    fields_to_remove = {"$schema", "additionalProperties"}
+
+    # 收集验证信息
+    validations = []
+    for field, label in validation_fields.items():
+        if field in schema:
+            validations.append(f"{label}: {schema[field]}")
+
+    # 递归清理 schema
+    cleaned = {}
+    for key, value in schema.items():
+        if key in fields_to_remove or key in validation_fields:
+            continue
+
+        if key == "description" and validations:
+            # 将验证要求追加到 description
+            cleaned[key] = f"{value} ({', '.join(validations)})"
+        elif isinstance(value, dict):
+            cleaned[key] = clean_json_schema(value)
+        elif isinstance(value, list):
+            cleaned[key] = [clean_json_schema(item) if isinstance(item, dict) else item for item in value]
+        else:
+            cleaned[key] = value
+
+    # 如果有验证信息但没有 description 字段，添加一个
+    if validations and "description" not in cleaned:
+        cleaned["description"] = f"Validation: {', '.join(validations)}"
+
+    return cleaned
