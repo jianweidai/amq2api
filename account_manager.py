@@ -101,16 +101,31 @@ def get_random_channel_by_model(model: str) -> Optional[str]:
         渠道名称 ('amazonq' 或 'gemini')，如果没有可用账号则返回 None
     """
     # Gemini 独占模型
-    gemini_only_models = ['gemini-2.0-flash-exp']
+    gemini_only_models = [
+        '"claude-sonnet-4-5-thinking',  # Claude thinking 模型
+    ]
 
-    # 如果是 Gemini 独占模型，只返回 gemini 渠道
-    if model in gemini_only_models:
+    # 如果是 Gemini 独占模型（以 gemini 开头或在独占列表中）
+    if model.startswith('gemini') or model in gemini_only_models:
         gemini_accounts = list_enabled_accounts(account_type='gemini')
         if gemini_accounts:
             return 'gemini'
         return None
 
+    # Amazon Q 独占模型
+    amazonq_only_models = [
+        'claude-sonnet-4',  # 只有 Amazon Q 支持
+    ]
+
+    # 如果是 Amazon Q 独占模型
+    if model in amazonq_only_models:
+        amazonq_accounts = list_enabled_accounts(account_type='amazonq')
+        if amazonq_accounts:
+            return 'amazonq'
+        return None
+
     # 对于其他模型（两个渠道都支持），按账号数量加权随机选择
+    # 注意：claude-sonnet-4.5 和 claude-sonnet-4-5 是同一个模型的不同叫法
     amazonq_accounts = list_enabled_accounts(account_type='amazonq')
     gemini_accounts = list_enabled_accounts(account_type='gemini')
 
