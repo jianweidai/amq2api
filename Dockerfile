@@ -18,6 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 复制应用代码
 COPY *.py .
 COPY frontend/ ./frontend/
+COPY gemini/ ./gemini/
 
 # 创建数据目录和非 root 用户
 RUN mkdir -p /app/data && \
