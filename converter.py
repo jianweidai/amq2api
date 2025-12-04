@@ -334,6 +334,8 @@ def convert_history_messages(messages: List[Any]) -> List[Dict[str, Any]]:
                     if isinstance(block, dict):
                         if block.get("type") == "text":
                             text_parts.append(block.get("text", ""))
+                        elif block.get("type") == "thinking":
+                            text_parts.append(f"{THINKING_START_TAG}{block.get('thinking', '')}{THINKING_END_TAG}")
                         elif block.get("type") == "tool_result":
                             # 提取 tool_result
                             if tool_results is None:
