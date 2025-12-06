@@ -146,7 +146,7 @@ def map_claude_model_to_gemini(claude_model: str) -> str:
         "gemini-2.5-flash", "gemini-2.5-flash-thinking", "gemini-2.5-pro",
         "gemini-3-pro-low", "gemini-3-pro-high", "gemini-2.5-flash-lite",
         "gemini-2.5-flash-image", "gemini-2.5-flash-image",
-        "claude-sonnet-4-5", "claude-sonnet-4-5-thinking",
+        "claude-sonnet-4-5", "claude-sonnet-4-5-thinking", "claude-opus-4-5-thinking",
         "gpt-oss-120b-medium"
     }
 
