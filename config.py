@@ -39,7 +39,7 @@ class GlobalConfig:
     gemini_api_endpoint: str = "https://daily-cloudcode-pa.sandbox.googleapis.com"
 
     # 服务配置
-    port: int = 8080
+    port: int = 8001
 
     # Token 统计配置
     zero_input_token_models: list = field(default_factory=lambda: ["haiku"])

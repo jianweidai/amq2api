@@ -27,11 +27,11 @@ RUN mkdir -p /app/data && \
 USER appuser
 
 # 暴露端口
-EXPOSE 8080
+EXPOSE 8001
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"
 
 # 启动应用
 CMD ["python", "main.py"]

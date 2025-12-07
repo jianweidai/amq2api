@@ -5,7 +5,7 @@ services:
     build: .
     container_name: amq2api
     ports:
-      - "${PORT:-8080}:8080"
+      - "${PORT:-8001}:${PORT:-8001}"
     environment:
       - AMAZONQ_REFRESH_TOKEN=${AMAZONQ_REFRESH_TOKEN}
       - AMAZONQ_CLIENT_ID=${AMAZONQ_CLIENT_ID}
