@@ -13,7 +13,7 @@ env:
   # Use docker.io for Docker Hub if empty
   REGISTRY: docker.io
   # Use your Docker Hub username instead of GitHub repository
-  IMAGE_NAME: ermercruz/amq2api
+  IMAGE_NAME: ermercruz/amq2api-v2
 
 
 jobs:
