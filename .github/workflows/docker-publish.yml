@@ -12,8 +12,8 @@ on:
 env:
   # Use docker.io for Docker Hub if empty
   REGISTRY: docker.io
-  # github.repository as <account>/<repo>
-  IMAGE_NAME: ${{ github.repository }}
+  # Use your Docker Hub username instead of GitHub repository
+  IMAGE_NAME: ermercruz/amq2api
 
 
 jobs:
