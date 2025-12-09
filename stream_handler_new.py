@@ -68,7 +68,7 @@ class AmazonQStreamHandler:
         # 输入 token 数量(小模型返回0避免累积)
         is_small_model = self._is_small_model_request(request_data)
         if is_small_model:
-            logger.info(f"检测到小模型请求,input_tokens 设置为 0")
+            # logger.info(f"检测到小模型请求,input_tokens 设置为 0")
             self.input_tokens = 0
         elif request_data:
             self.input_tokens = self._estimate_input_tokens(request_data)
@@ -292,7 +292,7 @@ class AmazonQStreamHandler:
 
                 elif isinstance(event, AssistantResponseEnd):
                     # 处理助手响应结束事件
-                    logger.info(f"收到助手响应结束事件，toolUses数量: {len(event.tool_uses)}")
+                    # logger.info(f"收到助手响应结束事件，toolUses数量: {len(event.tool_uses)}")
 
                     # Note: toolUses 已经在 toolUseEvent 中处理，这里不需要重复处理
                     # 检查是否需要发送 content_block_stop

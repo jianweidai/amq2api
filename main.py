@@ -183,8 +183,6 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
         request_data = await request.json()
         model = request_data.get('model', 'claude-sonnet-4.5')
 
-        logger.info(f"收到 Claude API 请求: model={model}")
-
         # 智能路由：根据模型选择渠道
         specified_account_id = request.headers.get("X-Account-ID")
 
@@ -211,11 +209,9 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
 
             # 如果选择了 Gemini 渠道，转发到 /v1/gemini/messages
             if channel == 'gemini':
-                logger.info(f"转发请求到 Gemini 渠道")
                 return await create_gemini_message(request)
 
         # 继续使用 Amazon Q 渠道的原有逻辑
-        logger.info(f"使用 Amazon Q 渠道处理请求")
 
         # 转换为 ClaudeRequest 对象
         claude_req = parse_claude_request(request_data)
@@ -290,10 +286,6 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
 
         final_request = codewhisperer_dict
 
-        # 调试：打印请求体
-        import json
-        logger.info(f"转换后的请求体: {json.dumps(final_request, indent=2, ensure_ascii=False)}")
-
         # 获取账号和认证头（支持多账号随机选择和单账号回退）
         # 检查是否指定了特定账号（用于测试）
         specified_account_id = request.headers.get("X-Account-ID")
@@ -345,8 +337,6 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
         }
 
         # 发送请求到 Amazon Q
-        logger.info("正在发送请求到 Amazon Q...")
-
         # API URL
         api_url = "https://q.us-east-1.amazonaws.com/"
 
@@ -406,7 +396,6 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
 
                                 # 更新认证头
                                 auth_headers["Authorization"] = f"Bearer {new_access_token}"
-                                logger.info(f"Token 刷新成功，使用新 token 重试请求")
 
                                 # 使用新 token 重试
                                 async with client.stream(
@@ -522,7 +511,6 @@ async def create_gemini_message(request: Request, _: bool = Depends(verify_api_k
     try:
         # 解析请求体
         request_data = await request.json()
-        logger.info(f"收到 Gemini API 请求: {request_data.get('model', 'unknown')}")
 
         # 转换为 ClaudeRequest 对象
         claude_req = parse_claude_request(request_data)
@@ -609,13 +597,6 @@ async def create_gemini_message(request: Request, _: bool = Depends(verify_api_k
             project=project_id
         )
 
-        # 打印请求体（调试用）
-        import json
-        logger.info("=" * 80)
-        logger.info("Gemini 请求体:")
-        logger.info(json.dumps(gemini_request, indent=2, ensure_ascii=False))
-        logger.info("=" * 80)
-
         # 获取认证头
         auth_headers = await token_manager.get_auth_headers()
 
@@ -629,9 +610,6 @@ async def create_gemini_message(request: Request, _: bool = Depends(verify_api_k
 
         # API URL
         api_url = f"{other.get('api_endpoint', 'https://daily-cloudcode-pa.sandbox.googleapis.com')}/v1internal:streamGenerateContent?alt=sse"
-
-        # 发送请求到 Gemini
-        logger.info("正在发送请求到 Gemini...")
 
         async def gemini_byte_stream():
             async with httpx.AsyncClient(timeout=300.0) as client:

@@ -34,9 +34,14 @@ async def handle_gemini_stream(response_stream: AsyncIterator[bytes], model: str
     buffer = ""
     byte_buffer = b""  # 用于累积不完整的 UTF-8 字节
 
+    chunk_count = 0
     async for chunk in response_stream:
+        chunk_count += 1
         if not chunk:
+            logger.debug(f"[Chunk {chunk_count}] 收到空 chunk")
             continue
+
+        logger.debug(f"[Chunk {chunk_count}] 收到 {len(chunk)} 字节")
 
         try:
             # 累积字节
@@ -46,31 +51,37 @@ async def handle_gemini_stream(response_stream: AsyncIterator[bytes], model: str
             try:
                 text = byte_buffer.decode('utf-8')
                 byte_buffer = b""  # 解码成功,清空字节缓冲区
-            except UnicodeDecodeError:
+                logger.debug(f"[Chunk {chunk_count}] 解码成功: {text[:200]}")
+            except UnicodeDecodeError as e:
                 # 解码失败,可能是不完整的多字节字符,等待更多数据
+                logger.debug(f"[Chunk {chunk_count}] 解码失败: {e}, byte_buffer 长度: {len(byte_buffer)}")
                 # 保留最后几个字节(最多4个,UTF-8最多4字节)
                 if len(byte_buffer) > 4:
                     # 尝试解码前面的部分
                     text = byte_buffer[:-4].decode('utf-8', errors='ignore')
                     byte_buffer = byte_buffer[-4:]
+                    logger.debug(f"[Chunk {chunk_count}] 部分解码: {text[:200]}")
                 else:
                     # 字节太少,继续等待
+                    logger.debug(f"[Chunk {chunk_count}] 字节太少,等待更多数据")
                     continue
 
             buffer += text
-            logger.info(text)
 
             while '\r\n\r\n' in buffer:
                 event_text, buffer = buffer.split('\r\n\r\n', 1)
+                logger.debug(f"[事件解析] event_text: {event_text[:300]}")
 
                 if event_text.startswith('data: '):
                     data_str = event_text[6:]
                     if data_str.strip() == '[DONE]':
+                        logger.info("[事件] 收到 [DONE] 标记")
                         continue
 
                     try:
                         data = json.loads(data_str)
                         response_data = data.get('response', data)
+                        logger.info(f"[事件] 收到响应: {json.dumps(response_data, ensure_ascii=False)[:500]}")
 
                         # 提取 responseId 并发送 message_start（仅第一次）
                         if not message_start_sent and 'responseId' in response_data:
@@ -95,7 +106,7 @@ async def handle_gemini_stream(response_stream: AsyncIterator[bytes], model: str
                             usage_meta = response_data['usageMetadata']
                             input_tokens = usage_meta.get('promptTokenCount', 0)
                             output_tokens = usage_meta.get('candidatesTokenCount', 0)
-                            logger.info(f"收到 usageMetadata: input_tokens={input_tokens}, output_tokens={output_tokens}")
+                            logger.info(f"[Token统计] input={input_tokens}, output={output_tokens}")
 
                         if 'candidates' in response_data:
                             for candidate in response_data['candidates']:
@@ -192,12 +203,14 @@ async def handle_gemini_stream(response_stream: AsyncIterator[bytes], model: str
                                         })
 
                     except json.JSONDecodeError as e:
-                        logger.warning(f"JSON 解析失败: {e}, data: {data_str}")
+                        logger.warning(f"[JSON错误] 解析失败: {e}, data: {data_str[:200]}")
                         continue
 
         except Exception as e:
-            logger.error(f"处理流式响应时出错: {e}")
+            logger.error(f"[异常] 处理流式响应时出错: {e}", exc_info=True)
             continue
+
+    logger.info(f"[流结束] 共处理 {chunk_count} 个 chunk, 最终 buffer 长度: {len(buffer)}")
 
     # 处理 buffer 中剩余的数据
     if buffer.strip():
@@ -234,12 +247,14 @@ async def handle_gemini_stream(response_stream: AsyncIterator[bytes], model: str
 
     # 关闭最后一个文本块
     if current_index >= 0 and content_blocks[current_index]['type'] == 'text':
+        logger.info(f"[结束] 关闭最后一个文本块 index={current_index}")
         yield format_sse_event("content_block_stop", {
             "type": "content_block_stop",
             "index": current_index
         })
 
     # 发送 message_delta 事件
+    logger.info(f"[结束] 发送 message_delta: input_tokens={input_tokens}, output_tokens={output_tokens}")
     yield format_sse_event("message_delta", {
         "type": "message_delta",
         "delta": {"stop_reason": "end_turn", "stop_sequence": None},
@@ -247,6 +262,7 @@ async def handle_gemini_stream(response_stream: AsyncIterator[bytes], model: str
     })
 
     # 发送 message_stop 事件
+    logger.info("[结束] 发送 message_stop")
     yield format_sse_event("message_stop", {
         "type": "message_stop"
     })
