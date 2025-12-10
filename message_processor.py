@@ -84,7 +84,7 @@ def process_claude_history_for_amazonq(history: List[Dict[str, Any]]) -> List[Di
     processed_history = []
     pending_user_messages = []
 
-    logger.info(f"[MESSAGE_PROCESSOR] 开始处理历史记录，共 {len(history)} 条消息")
+    # logger.info(f"[MESSAGE_PROCESSOR] 开始处理历史记录，共 {len(history)} 条消息")
 
     for idx, msg in enumerate(history):
         if "userInputMessage" in msg:

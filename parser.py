@@ -166,7 +166,7 @@ def build_claude_sse_event(event_type: str, data: Dict[str, Any]) -> str:
     return f"event: {event_type}\ndata: {json_data}\n\n"
 
 
-def build_claude_message_start_event(conversation_id: str, model: str = "claude-sonnet-4.5") -> str:
+def build_claude_message_start_event(conversation_id: str, model: str = "claude-sonnet-4.5", input_tokens: int = 0) -> str:
     """构建 message_start 事件"""
     data = {
         "type": "message_start",
@@ -178,28 +178,28 @@ def build_claude_message_start_event(conversation_id: str, model: str = "claude-
             "model": model,
             "stop_reason": None,
             "stop_sequence": None,
-            "usage": {"input_tokens": 0, "output_tokens": 0}
+            "usage": {"input_tokens": input_tokens, "output_tokens": 0}
         }
     }
     return build_claude_sse_event("message_start", data)
 
 
-def build_claude_content_block_start_event(index: int) -> str:
+def build_claude_content_block_start_event(index: int, content_type: str = "text") -> str:
     """构建 content_block_start 事件"""
     data = {
         "type": "content_block_start",
         "index": index,
-        "content_block": {"type": "text", "text": ""}
+        "content_block": {"type": content_type, content_type: ""}
     }
     return build_claude_sse_event("content_block_start", data)
 
 
-def build_claude_content_block_delta_event(index: int, text: str) -> str:
+def build_claude_content_block_delta_event(index: int, text: str, delta_type: str = "text_delta", field_name: str = "text") -> str:
     """构建 content_block_delta 事件"""
     data = {
         "type": "content_block_delta",
         "index": index,
-        "delta": {"type": "text_delta", "text": text}
+        "delta": {"type": delta_type, field_name: text}
     }
     return build_claude_sse_event("content_block_delta", data)
 
@@ -235,9 +235,9 @@ def build_claude_message_stop_event(
 
     # 再发送 message_stop（包含最终 usage）
     stop_data = {
-        "type": "message_stop",
-        "stop_reason": stop_reason or "end_turn",
-        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens}
+        "type": "message_stop"
+        # "stop_reason": stop_reason or "end_turn",
+        # "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens}
     }
     stop_event = build_claude_sse_event("message_stop", stop_data)
 

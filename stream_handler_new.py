@@ -26,6 +26,19 @@ from models import (
 
 logger = logging.getLogger(__name__)
 
+THINKING_START_TAG = "<thinking>"
+THINKING_END_TAG = "</thinking>"
+
+def _pending_tag_suffix(buffer: str, tag: str) -> int:
+    """检测 buffer 末尾是否是 tag 的部分前缀"""
+    if not buffer or not tag:
+        return 0
+    max_len = min(len(buffer), len(tag) - 1)
+    for length in range(max_len, 0, -1):
+        if buffer[-length:] == tag[:length]:
+            return length
+    return 0
+
 
 class AmazonQStreamHandler:
     """Amazon Q Event Stream 处理器"""
@@ -55,7 +68,7 @@ class AmazonQStreamHandler:
         # 输入 token 数量(小模型返回0避免累积)
         is_small_model = self._is_small_model_request(request_data)
         if is_small_model:
-            logger.info(f"检测到小模型请求,input_tokens 设置为 0")
+            # logger.info(f"检测到小模型请求,input_tokens 设置为 0")
             self.input_tokens = 0
         elif request_data:
             self.input_tokens = self._estimate_input_tokens(request_data)
@@ -74,9 +87,14 @@ class AmazonQStreamHandler:
 
         # 已处理的 tool_use_id 集合（用于去重）
         self._processed_tool_use_ids: set = set()
-        
+
         # 所有 tool use 的完整 input(用于 token 统计)
         self.all_tool_inputs: list[str] = []
+
+        # Thinking 标签状态
+        self.in_think_block: bool = False
+        self.think_buffer: str = ""
+        self.pending_start_tag_chars: int = 0
 
     async def handle_stream(
         self,
@@ -101,12 +119,9 @@ class AmazonQStreamHandler:
                 if not event_info:
                     continue
 
-                # 记录收到的事件类型(仅非 assistantResponseEvent)
+                # 记录收到的事件类型
                 event_type = event_info.get('event_type')
-                if event_type != 'assistantResponseEvent':
-                    logger.info(f"收到 Amazon Q 事件: {event_type}")
-                else:
-                    logger.debug(f"收到 Amazon Q 事件: {event_type}")
+                # logger.info(f"收到 Amazon Q 事件: {event_type}")
 
                 # 记录完整的事件信息（调试级别）
                 import json
@@ -135,7 +150,8 @@ class AmazonQStreamHandler:
                     if not self.message_start_sent:
                         cli_event = build_claude_message_start_event(
                             self.conversation_id or "unknown",
-                            self.model
+                            self.model,
+                            self.input_tokens
                         )
                         yield cli_event
                         self.message_start_sent = True
@@ -154,34 +170,129 @@ class AmazonQStreamHandler:
                         self.content_block_stop_sent = True
                         self.current_tool_use = None
 
-                    # 首次收到内容时，发送 content_block_start
-                    if not self.content_block_start_sent:
-                        # 内容块索引递增
-                        self.content_block_index += 1
-                        cli_event = build_claude_content_block_start_event(
-                            self.content_block_index
-                        )
-                        yield cli_event
-                        self.content_block_start_sent = True
-                        self.content_block_started = True
-
-                    # 发送内容增量
+                    # 处理内容并检测 thinking 标签
                     if event.delta and event.delta.text:
-                        text_chunk = event.delta.text
+                        content = event.delta.text
+                        self.think_buffer += content
 
-                        # 追加到缓冲区
-                        self.response_buffer.append(text_chunk)
+                        while self.think_buffer:
+                            # 处理待处理的开始标签字符
+                            if self.pending_start_tag_chars > 0:
+                                if len(self.think_buffer) < self.pending_start_tag_chars:
+                                    self.pending_start_tag_chars -= len(self.think_buffer)
+                                    self.think_buffer = ""
+                                    break
+                                else:
+                                    self.think_buffer = self.think_buffer[self.pending_start_tag_chars:]
+                                    self.pending_start_tag_chars = 0
+                                    if not self.think_buffer:
+                                        break
+                                    continue
 
-                        # 构建并发送事件
-                        cli_event = build_claude_content_block_delta_event(
-                            self.content_block_index,
-                            text_chunk
-                        )
-                        yield cli_event
+                            if not self.in_think_block:
+                                # 查找 <thinking> 标签
+                                think_start = self.think_buffer.find(THINKING_START_TAG)
+                                if think_start == -1:
+                                    # 检查是否有部分标签在末尾
+                                    pending = _pending_tag_suffix(self.think_buffer, THINKING_START_TAG)
+                                    if pending == len(self.think_buffer) and pending > 0:
+                                        # 整个 buffer 都是标签前缀，关闭文本块，开启 thinking 块
+                                        if self.content_block_start_sent:
+                                            yield build_claude_content_block_stop_event(self.content_block_index)
+                                            self.content_block_stop_sent = True
+                                            self.content_block_start_sent = False
+
+                                        self.content_block_index += 1
+                                        yield build_claude_content_block_start_event(self.content_block_index, "thinking")
+                                        self.content_block_start_sent = True
+                                        self.content_block_started = True
+                                        self.content_block_stop_sent = False
+                                        self.in_think_block = True
+                                        self.pending_start_tag_chars = len(THINKING_START_TAG) - pending
+                                        self.think_buffer = ""
+                                        break
+
+                                    # 发送非标签部分
+                                    emit_len = len(self.think_buffer) - pending
+                                    if emit_len <= 0:
+                                        break
+                                    text_chunk = self.think_buffer[:emit_len]
+                                    if text_chunk:
+                                        if not self.content_block_start_sent:
+                                            self.content_block_index += 1
+                                            yield build_claude_content_block_start_event(self.content_block_index, "text")
+                                            self.content_block_start_sent = True
+                                            self.content_block_started = True
+                                            self.content_block_stop_sent = False
+                                        self.response_buffer.append(text_chunk)
+                                        yield build_claude_content_block_delta_event(self.content_block_index, text_chunk)
+                                    self.think_buffer = self.think_buffer[emit_len:]
+                                else:
+                                    # 找到完整的 <thinking> 标签
+                                    before_text = self.think_buffer[:think_start]
+                                    if before_text:
+                                        if not self.content_block_start_sent:
+                                            self.content_block_index += 1
+                                            yield build_claude_content_block_start_event(self.content_block_index, "text")
+                                            self.content_block_start_sent = True
+                                            self.content_block_started = True
+                                            self.content_block_stop_sent = False
+                                        self.response_buffer.append(before_text)
+                                        yield build_claude_content_block_delta_event(self.content_block_index, before_text)
+                                    self.think_buffer = self.think_buffer[think_start + len(THINKING_START_TAG):]
+
+                                    # 关闭文本块，开启 thinking 块
+                                    if self.content_block_start_sent:
+                                        yield build_claude_content_block_stop_event(self.content_block_index)
+                                        self.content_block_stop_sent = True
+                                        self.content_block_start_sent = False
+
+                                    self.content_block_index += 1
+                                    yield build_claude_content_block_start_event(self.content_block_index, "thinking")
+                                    self.content_block_start_sent = True
+                                    self.content_block_started = True
+                                    self.content_block_stop_sent = False
+                                    self.in_think_block = True
+                                    self.pending_start_tag_chars = 0
+                            else:
+                                # 在 thinking 块中，查找 </thinking> 标签
+                                think_end = self.think_buffer.find(THINKING_END_TAG)
+                                if think_end == -1:
+                                    # 检查是否有部分结束标签
+                                    pending = _pending_tag_suffix(self.think_buffer, THINKING_END_TAG)
+                                    emit_len = len(self.think_buffer) - pending
+                                    if emit_len <= 0:
+                                        break
+                                    thinking_chunk = self.think_buffer[:emit_len]
+                                    if thinking_chunk:
+                                        yield build_claude_content_block_delta_event(
+                                            self.content_block_index,
+                                            thinking_chunk,
+                                            delta_type="thinking_delta",
+                                            field_name="thinking"
+                                        )
+                                    self.think_buffer = self.think_buffer[emit_len:]
+                                else:
+                                    # 找到完整的 </thinking> 标签
+                                    thinking_chunk = self.think_buffer[:think_end]
+                                    if thinking_chunk:
+                                        yield build_claude_content_block_delta_event(
+                                            self.content_block_index,
+                                            thinking_chunk,
+                                            delta_type="thinking_delta",
+                                            field_name="thinking"
+                                        )
+                                    self.think_buffer = self.think_buffer[think_end + len(THINKING_END_TAG):]
+
+                                    # 关闭 thinking 块
+                                    yield build_claude_content_block_stop_event(self.content_block_index)
+                                    self.content_block_stop_sent = True
+                                    self.content_block_start_sent = False
+                                    self.in_think_block = False
 
                 elif isinstance(event, AssistantResponseEnd):
                     # 处理助手响应结束事件
-                    logger.info(f"收到助手响应结束事件，toolUses数量: {len(event.tool_uses)}")
+                    # logger.info(f"收到助手响应结束事件，toolUses数量: {len(event.tool_uses)}")
 
                     # Note: toolUses 已经在 toolUseEvent 中处理，这里不需要重复处理
                     # 检查是否需要发送 content_block_stop
@@ -236,8 +347,8 @@ class AmazonQStreamHandler:
             tool_input = payload.get('input', {})
             is_stop = payload.get('stop', False)
 
-            logger.info(f"Tool use 事件 - ID: {tool_use_id}, Name: {tool_name}, Stop: {is_stop}")
-            logger.debug(f"Tool input: {tool_input}")
+            # logger.info(f"Tool use 事件 - ID: {tool_use_id}, Name: {tool_name}, Stop: {is_stop}")
+            # logger.debug(f"Tool input: {tool_input}")
 
             # 添加去重机制：检查是否已经处理过这个 tool_use_id
             # if tool_use_id and not is_stop:
@@ -318,7 +429,7 @@ class AmazonQStreamHandler:
                 full_input = "".join(self.tool_input_buffer)
                 logger.info(f"完成 tool use: {self.tool_name} (ID: {self.tool_use_id})")
                 logger.info(f"完整 input ({len(full_input)} 字符): {full_input}")
-                
+
                 # 保存完整的 tool input 用于 token 统计
                 self.all_tool_inputs.append(full_input)
 
@@ -328,10 +439,10 @@ class AmazonQStreamHandler:
                 logger.debug(f"发送 content_block_stop: index={self.content_block_index}")
                 yield cli_event
 
-                # 标记 content_block_stop 已发送，避免重复发送
-                self.content_block_stop_sent = True
-                # 重置 content_started 状态
+                # 重置状态，准备下一个 content block
+                self.content_block_stop_sent = False  # 重置为 False，允许下一个块
                 self.content_block_started = False
+                self.content_block_start_sent = False  # 也重置 start 标志
 
                 # 清理状态
                 self.current_tool_use = None

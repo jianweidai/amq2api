@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Amazon Q to Claude API Proxy - 将 Claude API 请求转换为 Amazon Q/CodeWhisperer 请求的代理服务。
 
-## 核心架构
+## 特别提醒
+
+查找代码时请使用acemcp来查找代码
 
 ### 请求流程
 ```
@@ -69,6 +71,7 @@ Amazon Q 返回 **AWS Event Stream 二进制格式**,不是标准 SSE:
 
 ### 模型映射
 - `claude-sonnet-4.5` 或 `claude-sonnet-4-5` → `claude-sonnet-4.5`
+- `claude-haiku-*` → `claude-haiku-4.5`
 - 其他所有模型 → `claude-sonnet-4`
 
 ### 工具描述限制
@@ -81,6 +84,19 @@ Amazon Q 的 `description` 字段限制 10240 字符。超长描述会:
 1. **历史消息必须严格交替**: user → assistant → user → assistant
 2. **连续用户消息会自动合并**: `message_processor.py` 处理
 3. **tool_result 格式转换**: Claude 格式 → Amazon Q 格式 (`[{"text": "..."}]`)
+4. **空 tool_result 智能处理**:
+   - 检测空内容并根据状态自动填充
+   - 成功状态 → "Command executed successfully"
+   - 错误/取消状态 → "Tool use was cancelled by the user"
+5. **图片内容处理**:
+   - Claude `type: image` 内容块自动提取并转换
+   - 支持 currentMessage 和 history 中的图片
+   - 格式转换: `media_type: "image/png"` → `format: "png"`
+6. **thinking 模式支持**:
+   - 检测 `thinking` 参数 (bool 或 `{'type': 'enabled'}`)
+   - 自动添加 thinking 提示标签到请求末尾
+   - 实时解析 `<thinking>` 标签并生成 `thinking_delta` 事件
+   - 支持标签跨字节流边界检测
 
 ### Token 管理
 - Token 缓存在 `~/.amazonq_token_cache.json`
