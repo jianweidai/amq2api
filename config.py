@@ -41,8 +41,9 @@ class GlobalConfig:
     # 服务配置
     port: int = 8001
 
-    # Token 统计配置
-    zero_input_token_models: list = field(default_factory=lambda: ["haiku"])
+    # Token 统计配置（默认为空，所有模型都统计 input_tokens）
+    # 如果需要某些模型不统计 input_tokens，可以在 .env 中设置 ZERO_INPUT_TOKEN_MODELS=haiku,other
+    zero_input_token_models: list = field(default_factory=list)
 
     # 动态更新的 token 信息
     access_token: Optional[str] = None
@@ -103,7 +104,9 @@ async def read_global_config() -> GlobalConfig:
     async with _config_lock:
         if _global_config is None:
             # 从环境变量初始化配置
-            zero_token_models = os.getenv("ZERO_INPUT_TOKEN_MODELS", "haiku")
+            # 默认为空字符串，表示所有模型都统计 input_tokens
+            zero_token_models_str = os.getenv("ZERO_INPUT_TOKEN_MODELS", "")
+            zero_token_models = [m.strip() for m in zero_token_models_str.split(",") if m.strip()]
             _global_config = GlobalConfig(
                 refresh_token=os.getenv("AMAZONQ_REFRESH_TOKEN", ""),
                 client_id=os.getenv("AMAZONQ_CLIENT_ID", ""),
@@ -117,7 +120,7 @@ async def read_global_config() -> GlobalConfig:
                 gemini_refresh_token=os.getenv("GEMINI_REFRESH_TOKEN") or None,
                 gemini_api_endpoint=os.getenv("GEMINI_API_ENDPOINT", "https://daily-cloudcode-pa.sandbox.googleapis.com"),
                 port=int(os.getenv("PORT", "8080")),
-                zero_input_token_models=[m.strip() for m in zero_token_models.split(",")]
+                zero_input_token_models=zero_token_models
             )
 
             # 验证必需的配置项
