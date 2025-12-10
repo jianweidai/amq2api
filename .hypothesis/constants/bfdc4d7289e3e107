@@ -1,0 +1,4 @@
+# file: /Users/jianweidai/Documents/vsproject/amq2api/parser.py
+# hypothesis_version: 6.148.7
+
+[':', 'JSON 对象不是字典类型', 'assistant', 'claude-sonnet-4.5', 'content', 'content_block', 'content_block_delta', 'content_block_start', 'content_block_stop', 'conversationId', 'data:', 'delta', 'end_turn', 'event_type', 'id', 'index', 'initial-response', 'input', 'input_json_delta', 'input_tokens', 'message', 'messageId', 'message_delta', 'message_start', 'message_stop', 'model', 'name', 'output_tokens', 'partial_json', 'payload', 'ping', 'role', 'stop_reason', 'stop_sequence', 'text', 'text_delta', 'toolUseEvent', 'toolUseId', 'toolUses', 'tool_use', 'type', 'usage']

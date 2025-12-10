@@ -1,0 +1,4 @@
+# file: /Users/jianweidai/Documents/vsproject/amq2api/usage_tracker.py
+# hypothesis_version: 6.148.7
+
+[100, 2000, ' AND ', '%Y-%m-%d %H:%M:%S', '%s', '/app/data', '3306', '?', 'MYSQL_DATABASE', 'MYSQL_HOST', 'MYSQL_PASSWORD', 'MYSQL_PORT', 'MYSQL_USER', 'account_id = ?', 'accounts.db', 'amazonq', 'amq2api', 'amq2api_', 'by_model', 'created_at >= ?', 'day', 'error', 'hour', 'input_tokens', 'model = ?', 'month', 'output_tokens', 'period', 'request_count', 'start_time', 'total_input_tokens', 'total_output_tokens', 'total_tokens', 'utf8mb4', 'week']

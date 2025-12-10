@@ -12,7 +12,9 @@ logger = logging.getLogger(__name__)
 async def handle_gemini_stream(
     response_stream: AsyncIterator[bytes], 
     model: str,
-    account_id: Optional[str] = None
+    account_id: Optional[str] = None,
+    cache_creation_input_tokens: int = 0,
+    cache_read_input_tokens: int = 0
 ) -> AsyncIterator[str]:
     """
     处理 Gemini SSE 流式响应，转换为 Claude SSE 格式
@@ -21,6 +23,8 @@ async def handle_gemini_stream(
         response_stream: Gemini 响应流
         model: 模型名称
         account_id: 账号 ID（用于 token 统计）
+        cache_creation_input_tokens: 缓存创建时消耗的 token 数量
+        cache_read_input_tokens: 从缓存读取的 token 数量
 
     Yields:
         Claude 格式的 SSE 事件
@@ -101,7 +105,12 @@ async def handle_gemini_stream(
                                     "model": model,
                                     "stop_reason": None,
                                     "stop_sequence": None,
-                                    "usage": {"input_tokens": 0, "output_tokens": 0}
+                                    "usage": {
+                                        "input_tokens": 0,
+                                        "output_tokens": 0,
+                                        "cache_creation_input_tokens": cache_creation_input_tokens,
+                                        "cache_read_input_tokens": cache_read_input_tokens
+                                    }
                                 }
                             })
                             message_start_sent = True
@@ -259,11 +268,16 @@ async def handle_gemini_stream(
         })
 
     # 发送 message_delta 事件
-    logger.info(f"[结束] 发送 message_delta: input_tokens={input_tokens}, output_tokens={output_tokens}")
+    logger.info(f"[结束] 发送 message_delta: input_tokens={input_tokens}, output_tokens={output_tokens}, cache_creation={cache_creation_input_tokens}, cache_read={cache_read_input_tokens}")
     yield format_sse_event("message_delta", {
         "type": "message_delta",
         "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens}
+        "usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cache_creation_input_tokens": cache_creation_input_tokens,
+            "cache_read_input_tokens": cache_read_input_tokens
+        }
     })
 
     # 发送 message_stop 事件
@@ -280,9 +294,11 @@ async def handle_gemini_stream(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             account_id=account_id,
-            channel="gemini"
+            channel="gemini",
+            cache_creation_input_tokens=cache_creation_input_tokens,
+            cache_read_input_tokens=cache_read_input_tokens
         )
-        logger.info(f"[Token统计] 已记录: model={model}, input={input_tokens}, output={output_tokens}")
+        logger.info(f"[Token统计] 已记录: model={model}, input={input_tokens}, output={output_tokens}, cache_creation={cache_creation_input_tokens}, cache_read={cache_read_input_tokens}")
     except Exception as e:
         logger.error(f"记录 token 使用量失败: {e}")
 

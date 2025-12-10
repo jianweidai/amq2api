@@ -45,6 +45,11 @@ class GlobalConfig:
     # 如果需要某些模型不统计 input_tokens，可以在 .env 中设置 ZERO_INPUT_TOKEN_MODELS=haiku,other
     zero_input_token_models: list = field(default_factory=list)
 
+    # Prompt Caching 模拟配置
+    enable_cache_simulation: bool = False
+    cache_ttl_seconds: int = 300  # 默认 5 分钟
+    max_cache_entries: int = 1000  # 默认最大 1000 条缓存
+
     # 动态更新的 token 信息
     access_token: Optional[str] = None
     token_expires_at: Optional[datetime] = None
@@ -120,7 +125,11 @@ async def read_global_config() -> GlobalConfig:
                 gemini_refresh_token=os.getenv("GEMINI_REFRESH_TOKEN") or None,
                 gemini_api_endpoint=os.getenv("GEMINI_API_ENDPOINT", "https://daily-cloudcode-pa.sandbox.googleapis.com"),
                 port=int(os.getenv("PORT", "8080")),
-                zero_input_token_models=zero_token_models
+                zero_input_token_models=zero_token_models,
+                # Prompt Caching 模拟配置
+                enable_cache_simulation=os.getenv("ENABLE_CACHE_SIMULATION", "false").lower() == "true",
+                cache_ttl_seconds=int(os.getenv("CACHE_TTL_SECONDS", "300")),
+                max_cache_entries=int(os.getenv("MAX_CACHE_ENTRIES", "1000"))
             )
 
             # 验证必需的配置项

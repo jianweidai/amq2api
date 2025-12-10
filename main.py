@@ -38,15 +38,33 @@ from gemini.auth import GeminiTokenManager
 from gemini.converter import convert_claude_to_gemini
 from gemini.handler import handle_gemini_stream
 
+# Cache Manager 导入
+from cache_manager import CacheManager, CacheResult
+
+# 全局 CacheManager 实例（在 lifespan 中初始化）
+_cache_manager: CacheManager | None = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
+    global _cache_manager
+    
     # 启动时初始化配置
     logger.info("正在初始化配置...")
     try:
-        await read_global_config()
+        config = await read_global_config()
         logger.info("配置初始化成功")
+        
+        # 初始化 CacheManager（如果启用了缓存模拟）
+        if config.enable_cache_simulation:
+            _cache_manager = CacheManager(
+                ttl_seconds=config.cache_ttl_seconds,
+                max_entries=config.max_cache_entries
+            )
+            logger.info(f"Prompt Caching 模拟已启用 (TTL: {config.cache_ttl_seconds}s, Max Entries: {config.max_cache_entries})")
+        else:
+            logger.info("Prompt Caching 模拟已禁用")
     except Exception as e:
         logger.error(f"配置初始化失败: {e}")
         raise
@@ -483,8 +501,38 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
 
         # 返回流式响应
         account_id_for_tracking = account.get('id') if account else None
+        
+        # 处理 Prompt Caching 模拟
+        cache_creation_input_tokens = 0
+        cache_read_input_tokens = 0
+        
+        if _cache_manager is not None:
+            # 从请求中提取可缓存内容
+            cacheable_content, token_count = _cache_manager.extract_cacheable_content(request_data)
+            
+            if cacheable_content and token_count > 0:
+                # 计算缓存键并检查缓存
+                cache_key = _cache_manager.calculate_cache_key(cacheable_content)
+                cache_result = _cache_manager.check_cache(cache_key, token_count)
+                
+                cache_creation_input_tokens = cache_result.cache_creation_input_tokens
+                cache_read_input_tokens = cache_result.cache_read_input_tokens
+                
+                if cache_result.is_hit:
+                    logger.info(f"Prompt Cache 命中: {token_count} tokens (key: {cache_key[:16]}...)")
+                else:
+                    logger.info(f"Prompt Cache 未命中: {token_count} tokens (key: {cache_key[:16]}...)")
+        
         async def claude_stream():
-            async for event in handle_amazonq_stream(byte_stream(), model=model, request_data=request_data, account_id=account_id_for_tracking, channel="amazonq"):
+            async for event in handle_amazonq_stream(
+                byte_stream(),
+                model=model,
+                request_data=request_data,
+                account_id=account_id_for_tracking,
+                channel="amazonq",
+                cache_creation_input_tokens=cache_creation_input_tokens,
+                cache_read_input_tokens=cache_read_input_tokens
+            ):
                 yield event
 
         return StreamingResponse(
@@ -737,8 +785,36 @@ async def create_gemini_message(request: Request, _: bool = Depends(verify_api_k
 
         # 返回流式响应
         gemini_account_id = account.get('id') if account else None
+        
+        # 处理 Prompt Caching 模拟
+        gemini_cache_creation_input_tokens = 0
+        gemini_cache_read_input_tokens = 0
+        
+        if _cache_manager is not None:
+            # 从请求中提取可缓存内容
+            cacheable_content, token_count = _cache_manager.extract_cacheable_content(request_data)
+            
+            if cacheable_content and token_count > 0:
+                # 计算缓存键并检查缓存
+                cache_key = _cache_manager.calculate_cache_key(cacheable_content)
+                cache_result = _cache_manager.check_cache(cache_key, token_count)
+                
+                gemini_cache_creation_input_tokens = cache_result.cache_creation_input_tokens
+                gemini_cache_read_input_tokens = cache_result.cache_read_input_tokens
+                
+                if cache_result.is_hit:
+                    logger.info(f"[Gemini] Prompt Cache 命中: {token_count} tokens (key: {cache_key[:16]}...)")
+                else:
+                    logger.info(f"[Gemini] Prompt Cache 未命中: {token_count} tokens (key: {cache_key[:16]}...)")
+        
         async def claude_stream():
-            async for event in handle_gemini_stream(gemini_byte_stream(), model=claude_req.model, account_id=gemini_account_id):
+            async for event in handle_gemini_stream(
+                gemini_byte_stream(),
+                model=claude_req.model,
+                account_id=gemini_account_id,
+                cache_creation_input_tokens=gemini_cache_creation_input_tokens,
+                cache_read_input_tokens=gemini_cache_read_input_tokens
+            ):
                 yield event
 
         return StreamingResponse(
@@ -1029,6 +1105,17 @@ async def oauth_callback_page():
     frontend_path = Path(__file__).parent / "frontend" / "oauth-callback-page.html"
     if not frontend_path.exists():
         raise HTTPException(status_code=404, detail="回调页面不存在")
+    return FileResponse(str(frontend_path))
+
+
+# Token 使用量仪表盘页面
+@app.get("/dashboard", response_class=FileResponse)
+async def dashboard_page():
+    """Token 使用量仪表盘页面"""
+    from pathlib import Path
+    frontend_path = Path(__file__).parent / "frontend" / "dashboard.html"
+    if not frontend_path.exists():
+        raise HTTPException(status_code=404, detail="仪表盘页面不存在")
     return FileResponse(str(frontend_path))
 
 
