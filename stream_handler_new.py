@@ -68,7 +68,7 @@ class AmazonQStreamHandler:
         # 输入 token 数量(小模型返回0避免累积)
         is_small_model = self._is_small_model_request(request_data)
         if is_small_model:
-            logger.info(f"检测到小模型请求,input_tokens 设置为 0")
+            # logger.info(f"检测到小模型请求,input_tokens 设置为 0")
             self.input_tokens = 0
         elif request_data:
             self.input_tokens = self._estimate_input_tokens(request_data)
@@ -121,7 +121,7 @@ class AmazonQStreamHandler:
 
                 # 记录收到的事件类型
                 event_type = event_info.get('event_type')
-                logger.info(f"收到 Amazon Q 事件: {event_type}")
+                # logger.info(f"收到 Amazon Q 事件: {event_type}")
 
                 # 记录完整的事件信息（调试级别）
                 import json
@@ -292,7 +292,7 @@ class AmazonQStreamHandler:
 
                 elif isinstance(event, AssistantResponseEnd):
                     # 处理助手响应结束事件
-                    logger.info(f"收到助手响应结束事件，toolUses数量: {len(event.tool_uses)}")
+                    # logger.info(f"收到助手响应结束事件，toolUses数量: {len(event.tool_uses)}")
 
                     # Note: toolUses 已经在 toolUseEvent 中处理，这里不需要重复处理
                     # 检查是否需要发送 content_block_stop
@@ -347,8 +347,8 @@ class AmazonQStreamHandler:
             tool_input = payload.get('input', {})
             is_stop = payload.get('stop', False)
 
-            logger.info(f"Tool use 事件 - ID: {tool_use_id}, Name: {tool_name}, Stop: {is_stop}")
-            logger.debug(f"Tool input: {tool_input}")
+            # logger.info(f"Tool use 事件 - ID: {tool_use_id}, Name: {tool_name}, Stop: {is_stop}")
+            # logger.debug(f"Tool input: {tool_input}")
 
             # 添加去重机制：检查是否已经处理过这个 tool_use_id
             # if tool_use_id and not is_stop:

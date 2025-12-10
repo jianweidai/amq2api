@@ -97,18 +97,17 @@ def convert_claude_to_gemini(claude_req: ClaudeRequest, project: str) -> Dict[st
 
             for i, item in enumerate(msg.content):
                 if isinstance(item, dict):
-                    if item.get("type") == "thinking":
-                        # continue
-                        # # 处理 thinking 内容块
+                    item_type = item.get("type")
+                    if item_type == "thinking":
                         part = {
                             "text": item.get("thinking", ""),
-                            "thought": True
+                            "thought": True,
                         }
                         parts.append(part)
                         # 如果有 signature，保存到下一个 item（text 或 tool_use）
                         if "signature" in item:
-                            pending_signature = item["signature"]
-                    elif item.get("type") == "text":
+                            part["thoughtSignature"] = item["signature"]
+                    elif item_type == "text":
                         part = {"text": item.get("text", "")}
                         # 如果有待附加的 signature，附加到这个 text part
                         if pending_signature:
@@ -169,7 +168,7 @@ def convert_claude_to_gemini(claude_req: ClaudeRequest, project: str) -> Dict[st
         })
 
     # 重新组织消息，确保 tool_use 后紧跟对应的 tool_result
-    contents = reorganize_tool_messages(contents)
+    # contents = reorganize_tool_messages(contents)
 
     # 构建 Gemini 请求
     gemini_request = {
@@ -195,18 +194,18 @@ def convert_claude_to_gemini(claude_req: ClaudeRequest, project: str) -> Dict[st
 
     # 添加 system instruction
     if claude_req.system:
+        system_parts = []
         # 处理 system 字段（可能是字符串或列表）
         if isinstance(claude_req.system, str):
             # 简单字符串格式
             system_parts = [{"text": claude_req.system}]
         elif isinstance(claude_req.system, list):
             # 列表格式，提取所有 text 内容
-            system_parts = []
             for item in claude_req.system:
                 if isinstance(item, dict) and item.get("type") == "text":
                     system_parts.append({"text": item.get("text", "")})
-        else:
-            system_parts = [{"text": str(claude_req.system)}]
+        # else:
+        #     system_parts = [{"text": str(claude_req.system)}]
 
         gemini_request["request"]["systemInstruction"] = {
             "role": "user",
@@ -283,82 +282,97 @@ def reorganize_tool_messages(contents: List[Dict[str, Any]]) -> List[Dict[str, A
                 if tool_id:
                     tool_results[tool_id] = part
 
-    # 如果没有工具调用，直接返回
-    if not tool_results:
-        return contents
-
-    # 平铺所有 parts，然后重新组合
-    new_contents = []
+    # 第一步：平铺所有 parts，每个 part 独立成消息
+    flattened = []
+    pending_signature = None
 
     for msg in contents:
-        parts = msg.get("parts", [])
-        i = 0
-
-        while i < len(parts):
-            part = parts[i]
-
-            # 跳过 functionResponse，它们会被组合到 functionCall 中
-            if "functionResponse" in part:
-                i += 1
+        for part in msg.get("parts", []):
+            # 检测空 text part（只有 thoughtSignature，text 为空）
+            if (part.get("text") == "" and "thoughtSignature" in part and
+                "functionCall" not in part and "functionResponse" not in part):
+                # 保存 signature，跳过这个空 part
+                pending_signature = part["thoughtSignature"]
                 continue
 
-            # 如果是 thinking，检查下一个 part 是否有 thoughtSignature
-            if part.get("thought"):
-                combined_parts = [part]
-                # 检查下一个 part 是否有 thoughtSignature
-                if i + 1 < len(parts) and "thoughtSignature" in parts[i + 1]:
-                    next_part = parts[i + 1]
-                    combined_parts.append(next_part)
-                    i += 1  # 跳过下一个 part
+            # 如果有待附加的 signature，附加到当前 part
+            if pending_signature:
+                part = dict(part)
+                part["thoughtSignature"] = pending_signature
+                pending_signature = None
 
-                    # 如果下一个 part 是 functionCall，需要单独处理 functionResponse
-                    if "functionCall" in next_part:
-                        # thinking + functionCall(带 thoughtSignature) 在一起
-                        new_contents.append({
-                            "role": "model",
-                            "parts": combined_parts
-                        })
-                        # functionResponse 单独成消息
-                        tool_id = next_part["functionCall"].get("id")
-                        if tool_id and tool_id in tool_results:
-                            new_contents.append({
-                                "role": "user",
-                                "parts": [tool_results[tool_id]]
-                            })
-                        i += 1
-                        continue
+            # 每个 part 独立成消息
+            flattened.append({
+                "role": msg["role"],
+                "parts": [part]
+            })
 
-                new_contents.append({
-                    "role": msg["role"],
-                    "parts": combined_parts
-                })
+    # 第二步：重新组合
+    new_contents = []
+    i = 0
+
+    while i < len(flattened):
+        msg = flattened[i]
+        part = msg["parts"][0]
+
+        # 跳过 functionResponse，它们会被组合到 functionCall 中
+        if "functionResponse" in part:
+            i += 1
+            continue
+
+        # 如果是 thinking，检查下一个是否有 thoughtSignature
+        if part.get("thought"):
+            combined_parts = [part]
+            # 检查下一个 part 是否有 thoughtSignature
+            if i + 1 < len(flattened) and "thoughtSignature" in flattened[i + 1]["parts"][0]:
+                next_part = flattened[i + 1]["parts"][0]
+                combined_parts.append(next_part)
                 i += 1
 
-            # 如果是 functionCall（且不带 thoughtSignature，因为带 thoughtSignature 的已经在上面处理了）
-            elif "functionCall" in part:
-                tool_id = part["functionCall"].get("id")
-
-                # functionCall 单独成消息
-                new_contents.append({
-                    "role": "model",
-                    "parts": [part]
-                })
-
-                # functionResponse 单独成消息
-                if tool_id and tool_id in tool_results:
+                # 如果下一个 part 是 functionCall，需要单独处理 functionResponse
+                if "functionCall" in next_part:
                     new_contents.append({
-                        "role": "user",
-                        "parts": [tool_results[tool_id]]
+                        "role": "model",
+                        "parts": combined_parts
                     })
-                i += 1
+                    # functionResponse 单独成消息
+                    tool_id = next_part["functionCall"].get("id")
+                    if tool_id and tool_id in tool_results:
+                        new_contents.append({
+                            "role": "user",
+                            "parts": [tool_results[tool_id]]
+                        })
+                    i += 1
+                    continue
 
-            # 其他 part 独立成消息
-            else:
+            new_contents.append({
+                "role": msg["role"],
+                "parts": combined_parts
+            })
+            i += 1
+
+        # 如果是 functionCall
+        elif "functionCall" in part:
+            tool_id = part["functionCall"].get("id")
+
+            # functionCall 单独成消息
+            new_contents.append({
+                "role": "model",
+                "parts": [part]
+            })
+
+            # functionResponse 单独成消息
+            if tool_id and tool_id in tool_results:
                 new_contents.append({
-                    "role": msg["role"],
-                    "parts": [part]
+                    "role": "user",
+                    "parts": [tool_results[tool_id]]
                 })
-                i += 1
+            i += 1
+
+        # 其他 part 保持独立
+        else:
+            new_contents.append(msg)
+            i += 1
 
     return new_contents
 

@@ -235,9 +235,9 @@ def build_claude_message_stop_event(
 
     # 再发送 message_stop（包含最终 usage）
     stop_data = {
-        "type": "message_stop",
-        "stop_reason": stop_reason or "end_turn",
-        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens}
+        "type": "message_stop"
+        # "stop_reason": stop_reason or "end_turn",
+        # "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens}
     }
     stop_event = build_claude_sse_event("message_stop", stop_data)
 
