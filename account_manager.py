@@ -1,6 +1,7 @@
 """
 账号管理模块
 负责多账号的数据库操作和管理
+支持 SQLite（默认）和 MySQL（可选）
 """
 import sqlite3
 import json
@@ -8,25 +9,50 @@ import uuid
 import time
 import random
 import logging
+import os
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-# 数据库路径
-# 优先使用 /app/data 目录（Docker 卷），否则使用当前目录
-import os
+# ============== 数据库配置 ==============
+
+# MySQL 配置（从环境变量读取）
+MYSQL_HOST = os.getenv("MYSQL_HOST", "").strip()
+MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
+MYSQL_USER = os.getenv("MYSQL_USER", "").strip()
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
+MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "amq2api").strip()
+
+# 判断是否使用 MySQL
+USE_MYSQL = bool(MYSQL_HOST and MYSQL_USER and MYSQL_DATABASE)
+
+# 表名前缀（MySQL 使用，SQLite 保持原样以兼容现有数据）
+TABLE_PREFIX = "amq2api_"
+ACCOUNTS_TABLE = f"{TABLE_PREFIX}accounts" if USE_MYSQL else "accounts"
+
+# SQLite 数据库路径
 if os.path.exists("/app/data"):
-    DB_PATH = Path("/app/data/accounts.db")
+    SQLITE_DB_PATH = Path("/app/data/accounts.db")
 else:
-    DB_PATH = Path(__file__).parent / "accounts.db"
+    SQLITE_DB_PATH = Path(__file__).parent / "accounts.db"
+
+# MySQL 连接池
+_mysql_pool = None
 
 
-def _ensure_db():
-    """初始化数据库表结构"""
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(DB_PATH) as conn:
+def _get_db_type() -> str:
+    """获取当前使用的数据库类型"""
+    return "mysql" if USE_MYSQL else "sqlite"
+
+
+# ============== SQLite 实现 ==============
+
+def _sqlite_ensure_db():
+    """初始化 SQLite 数据库表结构"""
+    SQLITE_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(SQLITE_DB_PATH) as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS accounts (
@@ -56,16 +82,87 @@ def _ensure_db():
         conn.commit()
 
 
-def _conn() -> sqlite3.Connection:
-    """创建数据库连接"""
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+def _sqlite_conn() -> sqlite3.Connection:
+    """创建 SQLite 数据库连接"""
+    conn = sqlite3.connect(SQLITE_DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def _row_to_dict(r: sqlite3.Row) -> Dict[str, Any]:
+# ============== MySQL 实现 ==============
+
+def _mysql_get_connection():
+    """获取 MySQL 连接"""
+    import pymysql
+    return pymysql.connect(
+        host=MYSQL_HOST,
+        port=MYSQL_PORT,
+        user=MYSQL_USER,
+        password=MYSQL_PASSWORD,
+        database=MYSQL_DATABASE,
+        charset='utf8mb4',
+        cursorclass=pymysql.cursors.DictCursor,
+        autocommit=True
+    )
+
+
+def _mysql_ensure_db():
+    """初始化 MySQL 数据库表结构"""
+    import pymysql
+    
+    # 先连接不指定数据库，创建数据库
+    conn = pymysql.connect(
+        host=MYSQL_HOST,
+        port=MYSQL_PORT,
+        user=MYSQL_USER,
+        password=MYSQL_PASSWORD,
+        charset='utf8mb4'
+    )
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{MYSQL_DATABASE}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+        conn.commit()
+    finally:
+        conn.close()
+    
+    # 连接到指定数据库，创建表
+    conn = _mysql_get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS `{ACCOUNTS_TABLE}` (
+                    id VARCHAR(36) PRIMARY KEY,
+                    label VARCHAR(255),
+                    clientId VARCHAR(255),
+                    clientSecret VARCHAR(512),
+                    refreshToken TEXT,
+                    accessToken TEXT,
+                    other LONGTEXT,
+                    last_refresh_time VARCHAR(32),
+                    last_refresh_status VARCHAR(32),
+                    created_at VARCHAR(32),
+                    updated_at VARCHAR(32),
+                    enabled TINYINT DEFAULT 1,
+                    type VARCHAR(32) DEFAULT 'amazonq'
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ============== 通用函数 ==============
+
+def _row_to_dict(r) -> Dict[str, Any]:
     """将数据库行转换为字典"""
-    d = dict(r)
+    if isinstance(r, sqlite3.Row):
+        d = dict(r)
+    else:
+        # MySQL DictCursor 已经是字典
+        d = dict(r) if r else {}
+    
     if d.get("other"):
         try:
             d["other"] = json.loads(d["other"])
@@ -76,14 +173,73 @@ def _row_to_dict(r: sqlite3.Row) -> Dict[str, Any]:
     return d
 
 
+def _ensure_db():
+    """初始化数据库"""
+    if USE_MYSQL:
+        logger.info(f"使用 MySQL 数据库: {MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}")
+        _mysql_ensure_db()
+    else:
+        logger.info(f"使用 SQLite 数据库: {SQLITE_DB_PATH}")
+        _sqlite_ensure_db()
+
+
+# ============== 账号管理 API ==============
+
 def list_enabled_accounts(account_type: Optional[str] = None) -> List[Dict[str, Any]]:
     """获取所有启用的账号"""
-    with _conn() as conn:
-        if account_type:
-            rows = conn.execute("SELECT * FROM accounts WHERE enabled=1 AND type=? ORDER BY created_at DESC", (account_type,)).fetchall()
-        else:
-            rows = conn.execute("SELECT * FROM accounts WHERE enabled=1 ORDER BY created_at DESC").fetchall()
-        return [_row_to_dict(r) for r in rows]
+    if USE_MYSQL:
+        conn = _mysql_get_connection()
+        try:
+            with conn.cursor() as cursor:
+                if account_type:
+                    cursor.execute(f"SELECT * FROM `{ACCOUNTS_TABLE}` WHERE enabled=1 AND type=%s ORDER BY created_at DESC", (account_type,))
+                else:
+                    cursor.execute(f"SELECT * FROM `{ACCOUNTS_TABLE}` WHERE enabled=1 ORDER BY created_at DESC")
+                rows = cursor.fetchall()
+                return [_row_to_dict(r) for r in rows]
+        finally:
+            conn.close()
+    else:
+        with _sqlite_conn() as conn:
+            if account_type:
+                rows = conn.execute(f"SELECT * FROM {ACCOUNTS_TABLE} WHERE enabled=1 AND type=? ORDER BY created_at DESC", (account_type,)).fetchall()
+            else:
+                rows = conn.execute(f"SELECT * FROM {ACCOUNTS_TABLE} WHERE enabled=1 ORDER BY created_at DESC").fetchall()
+            return [_row_to_dict(r) for r in rows]
+
+
+def list_all_accounts() -> List[Dict[str, Any]]:
+    """获取所有账号"""
+    if USE_MYSQL:
+        conn = _mysql_get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(f"SELECT * FROM `{ACCOUNTS_TABLE}` ORDER BY created_at DESC")
+                rows = cursor.fetchall()
+                return [_row_to_dict(r) for r in rows]
+        finally:
+            conn.close()
+    else:
+        with _sqlite_conn() as conn:
+            rows = conn.execute(f"SELECT * FROM {ACCOUNTS_TABLE} ORDER BY created_at DESC").fetchall()
+            return [_row_to_dict(r) for r in rows]
+
+
+def get_account(account_id: str) -> Optional[Dict[str, Any]]:
+    """根据ID获取账号"""
+    if USE_MYSQL:
+        conn = _mysql_get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(f"SELECT * FROM `{ACCOUNTS_TABLE}` WHERE id=%s", (account_id,))
+                row = cursor.fetchone()
+                return _row_to_dict(row) if row else None
+        finally:
+            conn.close()
+    else:
+        with _sqlite_conn() as conn:
+            row = conn.execute(f"SELECT * FROM {ACCOUNTS_TABLE} WHERE id=?", (account_id,)).fetchone()
+            return _row_to_dict(row) if row else None
 
 
 def get_random_account(account_type: Optional[str] = None, model: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -127,11 +283,11 @@ def get_random_channel_by_model(model: str) -> Optional[str]:
     """
     # Gemini 独占模型
     gemini_only_models = [
-        'claude-sonnet-4-5-thinking',  # Claude thinking 模型
-        'claude-opus-4-5-thinking',  # Claude thinking 模型
+        'claude-sonnet-4-5-thinking',
+        'claude-opus-4-5-thinking',
     ]
 
-    # 如果是 Gemini 独占模型（以 gemini 开头或在独占列表中）
+    # 如果是 Gemini 独占模型
     if model.startswith('gemini') or model in gemini_only_models:
         gemini_accounts = list_enabled_accounts(account_type='gemini')
         if gemini_accounts:
@@ -140,7 +296,7 @@ def get_random_channel_by_model(model: str) -> Optional[str]:
 
     # Amazon Q 独占模型
     amazonq_only_models = [
-        'claude-sonnet-4',  # 只有 Amazon Q 支持
+        'claude-sonnet-4',
         'claude-haiku-4.5'
     ]
 
@@ -151,19 +307,16 @@ def get_random_channel_by_model(model: str) -> Optional[str]:
             return 'amazonq'
         return None
 
-    # 对于其他模型（两个渠道都支持），按账号数量加权随机选择
-    # 注意：claude-sonnet-4.5 和 claude-sonnet-4-5 是同一个模型的不同叫法
+    # 对于其他模型，按账号数量加权随机选择
     amazonq_accounts = list_enabled_accounts(account_type='amazonq')
     gemini_accounts = list_enabled_accounts(account_type='gemini')
 
     amazonq_count = len(amazonq_accounts)
     gemini_count = len(gemini_accounts)
 
-    # 如果没有任何可用账号
     if amazonq_count == 0 and gemini_count == 0:
         return None
 
-    # 如果只有一个渠道有账号
     if amazonq_count == 0:
         return 'gemini'
     if gemini_count == 0:
@@ -177,15 +330,6 @@ def get_random_channel_by_model(model: str) -> Optional[str]:
         return 'amazonq'
     else:
         return 'gemini'
-
-
-def get_account(account_id: str) -> Optional[Dict[str, Any]]:
-    """根据ID获取账号"""
-    with _conn() as conn:
-        row = conn.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
-        if not row:
-            return None
-        return _row_to_dict(row)
 
 
 def create_account(
@@ -203,17 +347,34 @@ def create_account(
     acc_id = str(uuid.uuid4())
     other_str = json.dumps(other, ensure_ascii=False) if other else None
 
-    with _conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO accounts (id, label, clientId, clientSecret, refreshToken, accessToken, other, last_refresh_time, last_refresh_status, created_at, updated_at, enabled, type)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (acc_id, label, client_id, client_secret, refresh_token, access_token, other_str, None, "never", now, now, 1 if enabled else 0, account_type)
-        )
-        conn.commit()
-        row = conn.execute("SELECT * FROM accounts WHERE id=?", (acc_id,)).fetchone()
-        return _row_to_dict(row)
+    if USE_MYSQL:
+        conn = _mysql_get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    INSERT INTO `{ACCOUNTS_TABLE}` (id, label, clientId, clientSecret, refreshToken, accessToken, other, last_refresh_time, last_refresh_status, created_at, updated_at, enabled, type)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (acc_id, label, client_id, client_secret, refresh_token, access_token, other_str, None, "never", now, now, 1 if enabled else 0, account_type)
+                )
+                cursor.execute(f"SELECT * FROM `{ACCOUNTS_TABLE}` WHERE id=%s", (acc_id,))
+                row = cursor.fetchone()
+                return _row_to_dict(row)
+        finally:
+            conn.close()
+    else:
+        with _sqlite_conn() as conn:
+            conn.execute(
+                f"""
+                INSERT INTO {ACCOUNTS_TABLE} (id, label, clientId, clientSecret, refreshToken, accessToken, other, last_refresh_time, last_refresh_status, created_at, updated_at, enabled, type)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (acc_id, label, client_id, client_secret, refresh_token, access_token, other_str, None, "never", now, now, 1 if enabled else 0, account_type)
+            )
+            conn.commit()
+            row = conn.execute(f"SELECT * FROM {ACCOUNTS_TABLE} WHERE id=?", (acc_id,)).fetchone()
+            return _row_to_dict(row)
 
 
 def update_account(
@@ -232,41 +393,56 @@ def update_account(
     values: List[Any] = []
 
     if label is not None:
-        fields.append("label=?")
+        fields.append("label")
         values.append(label)
     if client_id is not None:
-        fields.append("clientId=?")
+        fields.append("clientId")
         values.append(client_id)
     if client_secret is not None:
-        fields.append("clientSecret=?")
+        fields.append("clientSecret")
         values.append(client_secret)
     if refresh_token is not None:
-        fields.append("refreshToken=?")
+        fields.append("refreshToken")
         values.append(refresh_token)
     if access_token is not None:
-        fields.append("accessToken=?")
+        fields.append("accessToken")
         values.append(access_token)
     if other is not None:
-        fields.append("other=?")
+        fields.append("other")
         values.append(json.dumps(other, ensure_ascii=False))
     if enabled is not None:
-        fields.append("enabled=?")
+        fields.append("enabled")
         values.append(1 if enabled else 0)
 
     if not fields:
         return get_account(account_id)
 
-    fields.append("updated_at=?")
+    fields.append("updated_at")
     values.append(now)
     values.append(account_id)
 
-    with _conn() as conn:
-        cur = conn.execute(f"UPDATE accounts SET {', '.join(fields)} WHERE id=?", values)
-        conn.commit()
-        if cur.rowcount == 0:
-            return None
-        row = conn.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
-        return _row_to_dict(row)
+    if USE_MYSQL:
+        set_clause = ", ".join([f"{f}=%s" for f in fields])
+        conn = _mysql_get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(f"UPDATE `{ACCOUNTS_TABLE}` SET {set_clause} WHERE id=%s", values)
+                if cursor.rowcount == 0:
+                    return None
+                cursor.execute(f"SELECT * FROM `{ACCOUNTS_TABLE}` WHERE id=%s", (account_id,))
+                row = cursor.fetchone()
+                return _row_to_dict(row) if row else None
+        finally:
+            conn.close()
+    else:
+        set_clause = ", ".join([f"{f}=?" for f in fields])
+        with _sqlite_conn() as conn:
+            cur = conn.execute(f"UPDATE {ACCOUNTS_TABLE} SET {set_clause} WHERE id=?", values)
+            conn.commit()
+            if cur.rowcount == 0:
+                return None
+            row = conn.execute(f"SELECT * FROM {ACCOUNTS_TABLE} WHERE id=?", (account_id,)).fetchone()
+            return _row_to_dict(row) if row else None
 
 
 def update_account_tokens(
@@ -278,55 +454,99 @@ def update_account_tokens(
     """更新账号的 token 信息"""
     now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
 
-    with _conn() as conn:
-        if refresh_token:
-            conn.execute(
-                """
-                UPDATE accounts
-                SET accessToken=?, refreshToken=?, last_refresh_time=?, last_refresh_status=?, updated_at=?
-                WHERE id=?
-                """,
-                (access_token, refresh_token, now, status, now, account_id)
-            )
-        else:
-            conn.execute(
-                """
-                UPDATE accounts
-                SET accessToken=?, last_refresh_time=?, last_refresh_status=?, updated_at=?
-                WHERE id=?
-                """,
-                (access_token, now, status, now, account_id)
-            )
-        conn.commit()
-        row = conn.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
-        return _row_to_dict(row) if row else None
+    if USE_MYSQL:
+        conn = _mysql_get_connection()
+        try:
+            with conn.cursor() as cursor:
+                if refresh_token:
+                    cursor.execute(
+                        f"""
+                        UPDATE `{ACCOUNTS_TABLE}`
+                        SET accessToken=%s, refreshToken=%s, last_refresh_time=%s, last_refresh_status=%s, updated_at=%s
+                        WHERE id=%s
+                        """,
+                        (access_token, refresh_token, now, status, now, account_id)
+                    )
+                else:
+                    cursor.execute(
+                        f"""
+                        UPDATE `{ACCOUNTS_TABLE}`
+                        SET accessToken=%s, last_refresh_time=%s, last_refresh_status=%s, updated_at=%s
+                        WHERE id=%s
+                        """,
+                        (access_token, now, status, now, account_id)
+                    )
+                cursor.execute(f"SELECT * FROM `{ACCOUNTS_TABLE}` WHERE id=%s", (account_id,))
+                row = cursor.fetchone()
+                return _row_to_dict(row) if row else None
+        finally:
+            conn.close()
+    else:
+        with _sqlite_conn() as conn:
+            if refresh_token:
+                conn.execute(
+                    f"""
+                    UPDATE {ACCOUNTS_TABLE}
+                    SET accessToken=?, refreshToken=?, last_refresh_time=?, last_refresh_status=?, updated_at=?
+                    WHERE id=?
+                    """,
+                    (access_token, refresh_token, now, status, now, account_id)
+                )
+            else:
+                conn.execute(
+                    f"""
+                    UPDATE {ACCOUNTS_TABLE}
+                    SET accessToken=?, last_refresh_time=?, last_refresh_status=?, updated_at=?
+                    WHERE id=?
+                    """,
+                    (access_token, now, status, now, account_id)
+                )
+            conn.commit()
+            row = conn.execute(f"SELECT * FROM {ACCOUNTS_TABLE} WHERE id=?", (account_id,)).fetchone()
+            return _row_to_dict(row) if row else None
 
 
 def update_refresh_status(account_id: str, status: str) -> None:
     """更新账号的刷新状态"""
     now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
-    with _conn() as conn:
-        conn.execute(
-            "UPDATE accounts SET last_refresh_time=?, last_refresh_status=?, updated_at=? WHERE id=?",
-            (now, status, now, account_id)
-        )
-        conn.commit()
+    
+    if USE_MYSQL:
+        conn = _mysql_get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    f"UPDATE `{ACCOUNTS_TABLE}` SET last_refresh_time=%s, last_refresh_status=%s, updated_at=%s WHERE id=%s",
+                    (now, status, now, account_id)
+                )
+        finally:
+            conn.close()
+    else:
+        with _sqlite_conn() as conn:
+            conn.execute(
+                f"UPDATE {ACCOUNTS_TABLE} SET last_refresh_time=?, last_refresh_status=?, updated_at=? WHERE id=?",
+                (now, status, now, account_id)
+            )
+            conn.commit()
 
 
 def delete_account(account_id: str) -> bool:
     """删除账号"""
-    with _conn() as conn:
-        cur = conn.execute("DELETE FROM accounts WHERE id=?", (account_id,))
-        conn.commit()
-        return cur.rowcount > 0
+    if USE_MYSQL:
+        conn = _mysql_get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(f"DELETE FROM `{ACCOUNTS_TABLE}` WHERE id=%s", (account_id,))
+                return cursor.rowcount > 0
+        finally:
+            conn.close()
+    else:
+        with _sqlite_conn() as conn:
+            cur = conn.execute(f"DELETE FROM {ACCOUNTS_TABLE} WHERE id=?", (account_id,))
+            conn.commit()
+            return cur.rowcount > 0
 
 
-def list_all_accounts() -> List[Dict[str, Any]]:
-    """获取所有账号"""
-    with _conn() as conn:
-        rows = conn.execute("SELECT * FROM accounts ORDER BY created_at DESC").fetchall()
-        return [_row_to_dict(r) for r in rows]
-
+# ============== 配额管理 ==============
 
 def is_model_available_for_account(account: Dict[str, Any], model: str) -> bool:
     """检查账号的指定模型是否有配额可用
@@ -343,14 +563,13 @@ def is_model_available_for_account(account: Dict[str, Any], model: str) -> bool:
         try:
             other = json.loads(other)
         except json.JSONDecodeError:
-            return True  # 如果解析失败，默认认为可用
+            return True
 
     if not other:
         other = {}
     credits_info = other.get("creditsInfo", {})
     models = credits_info.get("models", {})
 
-    # 如果没有该模型的配额信息，默认认为可用
     if model not in models:
         return True
 
@@ -358,17 +577,14 @@ def is_model_available_for_account(account: Dict[str, Any], model: str) -> bool:
     remaining_fraction = model_info.get("remainingFraction", 1.0)
     reset_time_str = model_info.get("resetTime")
 
-    # 如果配额大于 0，可用
     if remaining_fraction > 0:
         return True
 
-    # 如果配额为 0，检查是否已经到重置时间，并尝试自动恢复
     if reset_time_str:
         try:
             reset_time = datetime.fromisoformat(reset_time_str.replace('Z', '+00:00'))
             now = datetime.now(timezone.utc)
 
-            # 如果已经过了重置时间，尝试自动恢复配额
             if now >= reset_time:
                 account_id = account.get('id')
                 if account_id and restore_model_quota_if_needed(account_id, model):
@@ -407,28 +623,23 @@ def restore_model_quota_if_needed(account_id: str, model: str) -> bool:
     models = credits_info.get("models", {})
 
     if model not in models:
-        return True  # 没有配额信息，认为可用
+        return True
 
     model_info = models[model]
     remaining_fraction = model_info.get("remainingFraction", 1.0)
     reset_time_str = model_info.get("resetTime")
 
-    # 如果配额已经大于 0，不需要恢复
     if remaining_fraction > 0:
         return True
 
-    # 检查是否已到重置时间
     if reset_time_str:
         try:
             reset_time = datetime.fromisoformat(reset_time_str.replace('Z', '+00:00'))
             now = datetime.now(timezone.utc)
 
             if now >= reset_time:
-                # 已到重置时间，恢复配额为 1.0
                 model_info["remainingFraction"] = 1.0
                 model_info["remainingPercent"] = 100
-
-                # 更新数据库
                 update_account(account_id, other=other)
                 logger.info(f"已自动恢复账号 {account_id} 的模型 {model} 配额")
                 return True
@@ -458,7 +669,6 @@ def mark_model_exhausted(account_id: str, model: str, reset_time: str) -> None:
         except json.JSONDecodeError:
             other = {}
 
-    # 保 creditsInfo 结构存在
     if "creditsInfo" not in other:
         other["creditsInfo"] = {"models": {}, "summary": {"totalModels": 0, "averageRemaining": 0}}
 
@@ -466,7 +676,6 @@ def mark_model_exhausted(account_id: str, model: str, reset_time: str) -> None:
     if "models" not in credits_info:
         credits_info["models"] = {}
 
-    # 更新模型配额信息
     if model not in credits_info["models"]:
         credits_info["models"][model] = {}
 
@@ -474,7 +683,6 @@ def mark_model_exhausted(account_id: str, model: str, reset_time: str) -> None:
     credits_info["models"][model]["remainingPercent"] = 0
     credits_info["models"][model]["resetTime"] = reset_time
 
-    # 更新数据库
     update_account(account_id, other=other)
     logger.info(f"已标记账号 {account_id} 的模型 {model} 配额用完，重置时间: {reset_time}")
 

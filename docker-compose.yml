@@ -15,6 +15,12 @@ services:
       - AMAZONQ_API_ENDPOINT=${AMAZONQ_API_ENDPOINT:-https://q.us-east-1.amazonaws.com/}
       - AMAZONQ_TOKEN_ENDPOINT=${AMAZONQ_TOKEN_ENDPOINT:-https://oidc.us-east-1.amazonaws.com/token}
       - TIKTOKEN_CACHE_DIR=/home/appuser/.cache/tiktoken
+      # MySQL 配置（可选，不配置则使用 SQLite）
+      - MYSQL_HOST=${MYSQL_HOST:-}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
+      - MYSQL_USER=${MYSQL_USER:-}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-amq2api}
     volumes:
       - ./data/token_cache:/home/appuser
       - ./data/db_data:/app/data

@@ -16,3 +16,6 @@ python-json-logger==2.0.7
 
 # Token 计数
 tiktoken==0.5.2
+
+# MySQL 支持（可选）
+pymysql>=1.1.0

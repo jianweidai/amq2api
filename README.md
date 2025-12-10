@@ -141,6 +141,23 @@ curl -X POST http://localhost:8080/v1/messages \
 | `PORT` | ❌ | 8080 | 服务监听端口 |
 | `AMAZONQ_API_ENDPOINT` | ❌ | https://q.us-east-1.amazonaws.com/ | API 端点 |
 | `AMAZONQ_TOKEN_ENDPOINT` | ❌ | https://oidc.us-east-1.amazonaws.com/token | Token 端点 |
+| `MYSQL_HOST` | ❌ | 空 | MySQL 主机地址（配置后使用 MySQL 存储账号） |
+| `MYSQL_PORT` | ❌ | 3306 | MySQL 端口 |
+| `MYSQL_USER` | ❌ | 空 | MySQL 用户名 |
+| `MYSQL_PASSWORD` | ❌ | 空 | MySQL 密码 |
+| `MYSQL_DATABASE` | ❌ | amq2api | MySQL 数据库名 |
+
+### 数据库配置
+
+项目支持两种数据库存储方式：
+
+1. **SQLite（默认）**：无需配置，数据存储在本地 `accounts.db` 文件
+2. **MySQL（可选）**：配置 `MYSQL_HOST`、`MYSQL_USER`、`MYSQL_PASSWORD` 后自动切换
+
+使用 MySQL 的优势：
+- 支持多实例部署共享数据
+- 更好的并发性能
+- 便于数据备份和迁移
 
 ## Gemini OAuth 凭证获取
 
