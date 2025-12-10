@@ -176,11 +176,23 @@ def _row_to_dict(r) -> Dict[str, Any]:
 def _ensure_db():
     """初始化数据库"""
     if USE_MYSQL:
-        logger.info(f"使用 MySQL 数据库: {MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}")
+        logger.info("=" * 50)
+        logger.info("数据库配置: MySQL")
+        logger.info(f"  主机: {MYSQL_HOST}:{MYSQL_PORT}")
+        logger.info(f"  数据库: {MYSQL_DATABASE}")
+        logger.info(f"  用户: {MYSQL_USER}")
+        logger.info(f"  表名: {ACCOUNTS_TABLE}")
+        logger.info("=" * 50)
         _mysql_ensure_db()
+        logger.info("MySQL 数据库初始化完成")
     else:
-        logger.info(f"使用 SQLite 数据库: {SQLITE_DB_PATH}")
+        logger.info("=" * 50)
+        logger.info("数据库配置: SQLite")
+        logger.info(f"  路径: {SQLITE_DB_PATH}")
+        logger.info(f"  表名: {ACCOUNTS_TABLE}")
+        logger.info("=" * 50)
         _sqlite_ensure_db()
+        logger.info("SQLite 数据库初始化完成")
 
 
 # ============== 账号管理 API ==============
