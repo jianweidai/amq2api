@@ -3,6 +3,14 @@
 FastAPI 服务器，提供 Claude API 兼容的接口
 """
 import logging
+
+# 配置日志（必须在其他模块导入之前）
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 import httpx
 from typing import Optional
 from fastapi import FastAPI, Request, HTTPException, Header, Depends
@@ -29,13 +37,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from gemini.auth import GeminiTokenManager
 from gemini.converter import convert_claude_to_gemini
 from gemini.handler import handle_gemini_stream
-
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
