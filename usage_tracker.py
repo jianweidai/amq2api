@@ -69,6 +69,8 @@ def _ensure_usage_table():
                         input_tokens INT DEFAULT 0,
                         output_tokens INT DEFAULT 0,
                         total_tokens INT DEFAULT 0,
+                        cache_creation_input_tokens INT DEFAULT 0,
+                        cache_read_input_tokens INT DEFAULT 0,
                         channel VARCHAR(32) DEFAULT 'amazonq',
                         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                         INDEX idx_created_at (created_at),
@@ -76,6 +78,8 @@ def _ensure_usage_table():
                         INDEX idx_model (model)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """)
+                # Migrate existing tables: add cache columns if they don't exist
+                _migrate_cache_columns_mysql(cursor)
             conn.commit()
         finally:
             conn.close()
@@ -89,6 +93,8 @@ def _ensure_usage_table():
                     input_tokens INTEGER DEFAULT 0,
                     output_tokens INTEGER DEFAULT 0,
                     total_tokens INTEGER DEFAULT 0,
+                    cache_creation_input_tokens INTEGER DEFAULT 0,
+                    cache_read_input_tokens INTEGER DEFAULT 0,
                     channel TEXT DEFAULT 'amazonq',
                     created_at TEXT
                 )
@@ -97,7 +103,49 @@ def _ensure_usage_table():
             conn.execute(f"CREATE INDEX IF NOT EXISTS idx_usage_created_at ON {USAGE_TABLE}(created_at)")
             conn.execute(f"CREATE INDEX IF NOT EXISTS idx_usage_account_id ON {USAGE_TABLE}(account_id)")
             conn.execute(f"CREATE INDEX IF NOT EXISTS idx_usage_model ON {USAGE_TABLE}(model)")
+            # Migrate existing tables: add cache columns if they don't exist
+            _migrate_cache_columns_sqlite(conn)
             conn.commit()
+
+
+def _migrate_cache_columns_sqlite(conn: sqlite3.Connection) -> None:
+    """Add cache token columns to existing SQLite table if they don't exist"""
+    try:
+        # Check existing columns
+        cursor = conn.execute(f"PRAGMA table_info({USAGE_TABLE})")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+        
+        # Add cache_creation_input_tokens if missing
+        if "cache_creation_input_tokens" not in existing_columns:
+            conn.execute(f"ALTER TABLE {USAGE_TABLE} ADD COLUMN cache_creation_input_tokens INTEGER DEFAULT 0")
+            logger.info("Added cache_creation_input_tokens column to usage table")
+        
+        # Add cache_read_input_tokens if missing
+        if "cache_read_input_tokens" not in existing_columns:
+            conn.execute(f"ALTER TABLE {USAGE_TABLE} ADD COLUMN cache_read_input_tokens INTEGER DEFAULT 0")
+            logger.info("Added cache_read_input_tokens column to usage table")
+    except Exception as e:
+        logger.warning(f"Failed to migrate cache columns in SQLite: {e}")
+
+
+def _migrate_cache_columns_mysql(cursor) -> None:
+    """Add cache token columns to existing MySQL table if they don't exist"""
+    try:
+        # Check existing columns
+        cursor.execute(f"SHOW COLUMNS FROM `{USAGE_TABLE}`")
+        existing_columns = {row["Field"] for row in cursor.fetchall()}
+        
+        # Add cache_creation_input_tokens if missing
+        if "cache_creation_input_tokens" not in existing_columns:
+            cursor.execute(f"ALTER TABLE `{USAGE_TABLE}` ADD COLUMN cache_creation_input_tokens INT DEFAULT 0")
+            logger.info("Added cache_creation_input_tokens column to usage table")
+        
+        # Add cache_read_input_tokens if missing
+        if "cache_read_input_tokens" not in existing_columns:
+            cursor.execute(f"ALTER TABLE `{USAGE_TABLE}` ADD COLUMN cache_read_input_tokens INT DEFAULT 0")
+            logger.info("Added cache_read_input_tokens column to usage table")
+    except Exception as e:
+        logger.warning(f"Failed to migrate cache columns in MySQL: {e}")
 
 
 def record_usage(
@@ -105,7 +153,9 @@ def record_usage(
     input_tokens: int,
     output_tokens: int,
     account_id: Optional[str] = None,
-    channel: str = "amazonq"
+    channel: str = "amazonq",
+    cache_creation_input_tokens: int = 0,
+    cache_read_input_tokens: int = 0
 ) -> str:
     """
     记录一次 API 请求的 token 使用量
@@ -116,6 +166,8 @@ def record_usage(
         output_tokens: 输出 token 数
         account_id: 账号 ID（可选）
         channel: 渠道 (amazonq/gemini)
+        cache_creation_input_tokens: 缓存创建时消耗的 token 数（可选）
+        cache_read_input_tokens: 从缓存读取时消耗的 token 数（可选）
     
     Returns:
         记录 ID
@@ -131,21 +183,26 @@ def record_usage(
                 with conn.cursor() as cursor:
                     cursor.execute(f"""
                         INSERT INTO `{USAGE_TABLE}` 
-                        (id, account_id, model, input_tokens, output_tokens, total_tokens, channel, created_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    """, (record_id, account_id, model, input_tokens, output_tokens, total_tokens, channel, now))
+                        (id, account_id, model, input_tokens, output_tokens, total_tokens, 
+                         cache_creation_input_tokens, cache_read_input_tokens, channel, created_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (record_id, account_id, model, input_tokens, output_tokens, total_tokens,
+                          cache_creation_input_tokens, cache_read_input_tokens, channel, now))
             finally:
                 conn.close()
         else:
             with _sqlite_conn() as conn:
                 conn.execute(f"""
                     INSERT INTO {USAGE_TABLE}
-                    (id, account_id, model, input_tokens, output_tokens, total_tokens, channel, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (record_id, account_id, model, input_tokens, output_tokens, total_tokens, channel, now))
+                    (id, account_id, model, input_tokens, output_tokens, total_tokens,
+                     cache_creation_input_tokens, cache_read_input_tokens, channel, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (record_id, account_id, model, input_tokens, output_tokens, total_tokens,
+                      cache_creation_input_tokens, cache_read_input_tokens, channel, now))
                 conn.commit()
         
-        logger.debug(f"记录 token 使用: model={model}, input={input_tokens}, output={output_tokens}")
+        logger.debug(f"记录 token 使用: model={model}, input={input_tokens}, output={output_tokens}, "
+                     f"cache_creation={cache_creation_input_tokens}, cache_read={cache_read_input_tokens}")
     except Exception as e:
         logger.error(f"记录 token 使用失败: {e}")
     
@@ -210,7 +267,9 @@ def get_usage_summary(
                             COUNT(*) as request_count,
                             COALESCE(SUM(input_tokens), 0) as total_input_tokens,
                             COALESCE(SUM(output_tokens), 0) as total_output_tokens,
-                            COALESCE(SUM(total_tokens), 0) as total_tokens
+                            COALESCE(SUM(total_tokens), 0) as total_tokens,
+                            COALESCE(SUM(cache_creation_input_tokens), 0) as total_cache_creation_input_tokens,
+                            COALESCE(SUM(cache_read_input_tokens), 0) as total_cache_read_input_tokens
                         FROM `{USAGE_TABLE}`
                         WHERE {where_clause_mysql}
                     """, params)
@@ -223,7 +282,9 @@ def get_usage_summary(
                             COUNT(*) as request_count,
                             COALESCE(SUM(input_tokens), 0) as input_tokens,
                             COALESCE(SUM(output_tokens), 0) as output_tokens,
-                            COALESCE(SUM(total_tokens), 0) as total_tokens
+                            COALESCE(SUM(total_tokens), 0) as total_tokens,
+                            COALESCE(SUM(cache_creation_input_tokens), 0) as cache_creation_input_tokens,
+                            COALESCE(SUM(cache_read_input_tokens), 0) as cache_read_input_tokens
                         FROM `{USAGE_TABLE}`
                         WHERE {where_clause_mysql}
                         GROUP BY model
@@ -238,6 +299,8 @@ def get_usage_summary(
                         "input_tokens": summary["total_input_tokens"],
                         "output_tokens": summary["total_output_tokens"],
                         "total_tokens": summary["total_tokens"],
+                        "cache_creation_input_tokens": summary["total_cache_creation_input_tokens"],
+                        "cache_read_input_tokens": summary["total_cache_read_input_tokens"],
                         "by_model": list(by_model)
                     }
             finally:
@@ -250,7 +313,9 @@ def get_usage_summary(
                         COUNT(*) as request_count,
                         COALESCE(SUM(input_tokens), 0) as total_input_tokens,
                         COALESCE(SUM(output_tokens), 0) as total_output_tokens,
-                        COALESCE(SUM(total_tokens), 0) as total_tokens
+                        COALESCE(SUM(total_tokens), 0) as total_tokens,
+                        COALESCE(SUM(cache_creation_input_tokens), 0) as total_cache_creation_input_tokens,
+                        COALESCE(SUM(cache_read_input_tokens), 0) as total_cache_read_input_tokens
                     FROM {USAGE_TABLE}
                     WHERE {where_clause}
                 """, params)
@@ -264,7 +329,9 @@ def get_usage_summary(
                         COUNT(*) as request_count,
                         COALESCE(SUM(input_tokens), 0) as input_tokens,
                         COALESCE(SUM(output_tokens), 0) as output_tokens,
-                        COALESCE(SUM(total_tokens), 0) as total_tokens
+                        COALESCE(SUM(total_tokens), 0) as total_tokens,
+                        COALESCE(SUM(cache_creation_input_tokens), 0) as cache_creation_input_tokens,
+                        COALESCE(SUM(cache_read_input_tokens), 0) as cache_read_input_tokens
                     FROM {USAGE_TABLE}
                     WHERE {where_clause}
                     GROUP BY model
@@ -279,6 +346,8 @@ def get_usage_summary(
                     "input_tokens": summary.get("total_input_tokens", 0),
                     "output_tokens": summary.get("total_output_tokens", 0),
                     "total_tokens": summary.get("total_tokens", 0),
+                    "cache_creation_input_tokens": summary.get("total_cache_creation_input_tokens", 0),
+                    "cache_read_input_tokens": summary.get("total_cache_read_input_tokens", 0),
                     "by_model": by_model
                 }
     except Exception as e:
@@ -290,6 +359,8 @@ def get_usage_summary(
             "input_tokens": 0,
             "output_tokens": 0,
             "total_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
             "by_model": [],
             "error": str(e)
         }

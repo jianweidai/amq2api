@@ -44,7 +44,15 @@ def _pending_tag_suffix(buffer: str, tag: str) -> int:
 class AmazonQStreamHandler:
     """Amazon Q Event Stream 处理器"""
 
-    def __init__(self, model: str = "claude-sonnet-4.5", request_data: Optional[dict] = None, account_id: Optional[str] = None, channel: str = "amazonq"):
+    def __init__(
+        self,
+        model: str = "claude-sonnet-4.5",
+        request_data: Optional[dict] = None,
+        account_id: Optional[str] = None,
+        channel: str = "amazonq",
+        cache_creation_input_tokens: int = 0,
+        cache_read_input_tokens: int = 0
+    ):
         # 响应文本累积缓冲区
         self.response_buffer: list[str] = []
 
@@ -69,6 +77,10 @@ class AmazonQStreamHandler:
         # 账号信息（用于 token 统计）
         self.account_id: Optional[str] = account_id
         self.channel: str = channel
+        
+        # 缓存统计（用于 Prompt Caching 模拟）
+        self.cache_creation_input_tokens: int = cache_creation_input_tokens
+        self.cache_read_input_tokens: int = cache_read_input_tokens
 
         # 输入 token 数量(小模型返回0避免累积)
         is_small_model = self._is_small_model_request(request_data)
@@ -156,7 +168,9 @@ class AmazonQStreamHandler:
                         cli_event = build_claude_message_start_event(
                             self.conversation_id or "unknown",
                             self.model,
-                            self.input_tokens
+                            self.input_tokens,
+                            cache_creation_input_tokens=self.cache_creation_input_tokens,
+                            cache_read_input_tokens=self.cache_read_input_tokens
                         )
                         yield cli_event
                         self.message_start_sent = True
@@ -322,7 +336,7 @@ class AmazonQStreamHandler:
             full_tool_inputs = "".join(self.all_tool_inputs)
             output_tokens = self._count_tokens(full_text_response + full_tool_inputs)
             
-            logger.info(f"Token 统计 - 输入: {self.input_tokens}, 输出: {output_tokens} (文本: {len(full_text_response)} 字符, tool inputs: {len(full_tool_inputs)} 字符)")
+            logger.info(f"Token 统计 - 输入: {self.input_tokens}, 输出: {output_tokens} (文本: {len(full_text_response)} 字符, tool inputs: {len(full_tool_inputs)} 字符), 缓存创建: {self.cache_creation_input_tokens}, 缓存读取: {self.cache_read_input_tokens}")
 
             # 记录 token 使用量到数据库
             try:
@@ -331,7 +345,9 @@ class AmazonQStreamHandler:
                     input_tokens=self.input_tokens,
                     output_tokens=output_tokens,
                     account_id=self.account_id,
-                    channel=self.channel
+                    channel=self.channel,
+                    cache_creation_input_tokens=self.cache_creation_input_tokens,
+                    cache_read_input_tokens=self.cache_read_input_tokens
                 )
             except Exception as e:
                 logger.error(f"记录 token 使用量失败: {e}")
@@ -339,7 +355,9 @@ class AmazonQStreamHandler:
             cli_event = build_claude_message_stop_event(
                 self.input_tokens,
                 output_tokens,
-                "end_turn"
+                "end_turn",
+                cache_creation_input_tokens=self.cache_creation_input_tokens,
+                cache_read_input_tokens=self.cache_read_input_tokens
             )
             yield cli_event
 
@@ -603,7 +621,9 @@ async def handle_amazonq_stream(
     model: str = "claude-sonnet-4.5",
     request_data: Optional[dict] = None,
     account_id: Optional[str] = None,
-    channel: str = "amazonq"
+    channel: str = "amazonq",
+    cache_creation_input_tokens: int = 0,
+    cache_read_input_tokens: int = 0
 ) -> AsyncIterator[str]:
     """
     处理 Amazon Q Event Stream 的便捷函数
@@ -614,10 +634,19 @@ async def handle_amazonq_stream(
         request_data: 原始 Claude API 请求数据(用于估算 input tokens)
         account_id: 账号 ID（用于 token 统计）
         channel: 渠道 (amazonq/gemini)
+        cache_creation_input_tokens: 缓存创建时消耗的 token 数量
+        cache_read_input_tokens: 从缓存读取的 token 数量
 
     Yields:
         str: Claude 格式的 SSE 事件
     """
-    handler = AmazonQStreamHandler(model=model, request_data=request_data, account_id=account_id, channel=channel)
+    handler = AmazonQStreamHandler(
+        model=model,
+        request_data=request_data,
+        account_id=account_id,
+        channel=channel,
+        cache_creation_input_tokens=cache_creation_input_tokens,
+        cache_read_input_tokens=cache_read_input_tokens
+    )
     async for event in handler.handle_stream(upstream_bytes):
         yield event

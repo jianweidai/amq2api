@@ -166,8 +166,31 @@ def build_claude_sse_event(event_type: str, data: Dict[str, Any]) -> str:
     return f"event: {event_type}\ndata: {json_data}\n\n"
 
 
-def build_claude_message_start_event(conversation_id: str, model: str = "claude-sonnet-4.5", input_tokens: int = 0) -> str:
-    """构建 message_start 事件"""
+def build_claude_message_start_event(
+    conversation_id: str,
+    model: str = "claude-sonnet-4.5",
+    input_tokens: int = 0,
+    cache_creation_input_tokens: int = 0,
+    cache_read_input_tokens: int = 0
+) -> str:
+    """构建 message_start 事件
+    
+    Args:
+        conversation_id: 会话 ID
+        model: 模型名称
+        input_tokens: 输入 token 数量
+        cache_creation_input_tokens: 缓存创建时消耗的 token 数量
+        cache_read_input_tokens: 从缓存读取的 token 数量
+    
+    Returns:
+        str: SSE 格式的 message_start 事件
+    """
+    usage = {
+        "input_tokens": input_tokens,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": cache_creation_input_tokens,
+        "cache_read_input_tokens": cache_read_input_tokens
+    }
     data = {
         "type": "message_start",
         "message": {
@@ -178,7 +201,7 @@ def build_claude_message_start_event(conversation_id: str, model: str = "claude-
             "model": model,
             "stop_reason": None,
             "stop_sequence": None,
-            "usage": {"input_tokens": input_tokens, "output_tokens": 0}
+            "usage": usage
         }
     }
     return build_claude_sse_event("message_start", data)
@@ -222,14 +245,33 @@ def build_claude_ping_event() -> str:
 def build_claude_message_stop_event(
     input_tokens: int,
     output_tokens: int,
-    stop_reason: Optional[str] = None
+    stop_reason: Optional[str] = None,
+    cache_creation_input_tokens: int = 0,
+    cache_read_input_tokens: int = 0
 ) -> str:
-    """构建 message_delta 和 message_stop 事件"""
+    """构建 message_delta 和 message_stop 事件
+    
+    Args:
+        input_tokens: 输入 token 数量
+        output_tokens: 输出 token 数量
+        stop_reason: 停止原因
+        cache_creation_input_tokens: 缓存创建时消耗的 token 数量
+        cache_read_input_tokens: 从缓存读取的 token 数量
+    
+    Returns:
+        str: SSE 格式的 message_delta 和 message_stop 事件
+    """
     # 先发送 message_delta
+    usage = {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cache_creation_input_tokens": cache_creation_input_tokens,
+        "cache_read_input_tokens": cache_read_input_tokens
+    }
     delta_data = {
         "type": "message_delta",
         "delta": {"stop_reason": stop_reason or "end_turn", "stop_sequence": None},
-        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens}
+        "usage": usage
     }
     delta_event = build_claude_sse_event("message_delta", delta_data)
 

@@ -1,0 +1,134 @@
+# Implementation Plan
+
+- [x] 1. Create cache manager module
+  - [x] 1.1 Create cache_manager.py with CacheEntry and CacheResult dataclasses
+    - Define CacheEntry with key, token_count, created_at, last_accessed fields
+    - Define CacheResult with is_hit, cache_creation_input_tokens, cache_read_input_tokens fields
+    - _Requirements: 3.1, 3.2, 7.1, 7.2_
+  - [x] 1.2 Implement CacheManager class with core methods
+    - Implement __init__ with ttl_seconds and max_entries parameters
+    - Implement calculate_cache_key using SHA-256 hash
+    - Implement check_cache method for cache lookup and update
+    - Implement _evict_expired for TTL-based cleanup
+    - Implement _evict_lru for capacity-based cleanup
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 7.1, 7.2, 7.4_
+  - [x] 1.3 Write property test for cache key determinism
+    - **Property 6: Cache key determinism**
+    - **Validates: Requirements 3.4, 7.4**
+  - [x] 1.4 Write property test for cache miss behavior
+    - **Property 3: Cache miss reports creation tokens**
+    - **Validates: Requirements 3.1**
+  - [ ]* 1.5 Write property test for cache hit behavior
+    - **Property 4: Cache hit reports read tokens**
+    - **Validates: Requirements 3.2**
+  - [ ]* 1.6 Write property test for TTL expiration
+    - **Property 5: Cache TTL expiration**
+    - **Validates: Requirements 3.3**
+  - [ ]* 1.7 Write property test for LRU eviction
+    - **Property 9: LRU eviction on capacity**
+    - **Validates: Requirements 7.1**
+  - [ ]* 1.8 Write property test for LRU access time update
+    - **Property 10: LRU access time update**
+    - **Validates: Requirements 7.2**
+
+- [x] 2. Implement cacheable content extraction
+  - [x] 2.1 Add extract_cacheable_content method to CacheManager
+    - Parse system prompt for cache_control markers
+    - Parse message content blocks for cache_control markers
+    - Calculate token count for cacheable content
+    - Return tuple of (content_string, token_count)
+    - _Requirements: 1.1, 1.2, 1.3, 2.3_
+  - [ ]* 2.2 Write property test for cache_control parsing
+    - **Property 1: cache_control parsing consistency**
+    - **Validates: Requirements 1.1, 1.2**
+
+- [x] 3. Checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 4. Update usage tracker for cache statistics
+  - [x] 4.1 Update database schema with cache token fields
+    - Add cache_creation_input_tokens column to usage table
+    - Add cache_read_input_tokens column to usage table
+    - Handle both SQLite and MySQL schemas
+    - Ensure backward compatibility with existing data
+    - _Requirements: 5.1, 5.2, 5.4_
+  - [x] 4.2 Update record_usage function to accept cache parameters
+    - Add cache_creation_input_tokens parameter
+    - Add cache_read_input_tokens parameter
+    - Store cache statistics in database
+    - _Requirements: 5.1, 5.2_
+  - [x] 4.3 Update get_usage_summary to include cache statistics
+    - Aggregate cache_creation_input_tokens
+    - Aggregate cache_read_input_tokens
+    - Include in summary response
+    - _Requirements: 5.3_
+  - [ ]* 4.4 Write property test for database cache field persistence
+    - **Property 7: Database cache field persistence**
+    - **Validates: Requirements 5.1, 5.2**
+  - [ ]* 4.5 Write property test for usage summary aggregation
+    - **Property 8: Usage summary cache aggregation**
+    - **Validates: Requirements 5.3**
+
+- [x] 5. Update SSE event builders for cache statistics
+  - [x] 5.1 Update build_claude_message_start_event in parser.py
+    - Add cache_creation_input_tokens parameter
+    - Add cache_read_input_tokens parameter
+    - Include cache fields in usage object of message_start event
+    - _Requirements: 6.1, 6.2_
+  - [x] 5.2 Update build_claude_message_stop_event in parser.py
+    - Add cache_creation_input_tokens parameter
+    - Add cache_read_input_tokens parameter
+    - Include cache fields in usage object of message_delta event
+    - _Requirements: 6.3_
+  - [ ]* 5.3 Write property test for usage statistics completeness
+    - **Property 2: Usage statistics completeness**
+    - **Validates: Requirements 2.1, 2.2, 2.4, 6.1, 6.2, 6.3**
+
+- [x] 6. Integrate cache manager into stream handler
+  - [x] 6.1 Update AmazonQStreamHandler to track cache statistics
+    - Add cache_creation_input_tokens field
+    - Add cache_read_input_tokens field
+    - Pass cache stats to SSE event builders
+    - Pass cache stats to record_usage
+    - _Requirements: 2.1, 2.2, 6.1, 6.2, 6.3_
+  - [x] 6.2 Update handle_amazonq_stream function signature
+    - Add cache_result parameter
+    - Pass cache statistics through the handler
+    - _Requirements: 2.3_
+
+- [x] 7. Integrate cache manager into main request handler
+  - [x] 7.1 Add configuration for cache simulation
+    - Read ENABLE_CACHE_SIMULATION from environment
+    - Read CACHE_TTL_SECONDS from environment
+    - Read MAX_CACHE_ENTRIES from environment
+    - Initialize global CacheManager instance
+    - _Requirements: 4.1, 4.2, 4.3, 4.4_
+  - [x] 7.2 Update /v1/messages endpoint to use cache manager
+    - Extract cacheable content from request
+    - Check cache and get CacheResult
+    - Pass cache statistics to stream handler
+    - _Requirements: 1.4, 2.3, 3.1, 3.2_
+  - [x] 7.3 Update Gemini handler to support cache statistics
+    - Apply same cache logic to Gemini requests
+    - Pass cache statistics through Gemini stream handler
+    - _Requirements: 2.3_
+
+- [x] 8. Checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ]* 9. Write integration tests
+  - [ ]* 9.1 Write end-to-end test for cache miss scenario
+    - Send request with cache_control
+    - Verify response contains cache_creation_input_tokens
+    - _Requirements: 3.1_
+  - [ ]* 9.2 Write end-to-end test for cache hit scenario
+    - Send same request twice
+    - Verify second response contains cache_read_input_tokens
+    - _Requirements: 3.2_
+  - [ ]* 9.3 Write test for cache simulation disabled
+    - Set ENABLE_CACHE_SIMULATION=false
+    - Verify no cache statistics in response
+    - _Requirements: 4.2_
+
+- [x] 10. Final Checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.

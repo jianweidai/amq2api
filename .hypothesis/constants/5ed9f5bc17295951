@@ -1,0 +1,4 @@
+# file: /Users/jianweidai/Documents/vsproject/amq2api/stream_handler_new.py
+# hypothesis_version: 6.148.7
+
+['([-_]|$)', '(^|[-_])', '</thinking>', '<thinking>', 'amazonq', 'cl100k_base', 'claude-sonnet-4.5', 'content', 'description', 'end_turn', 'event_type', 'haiku', 'input', 'input_schema', 'messages', 'model', 'name', 'payload', 'stop', 'system', 'text', 'thinking', 'thinking_delta', 'toolUseEvent', 'toolUseId', 'tool_result', 'tool_use', 'tools', 'type', 'unknown']
