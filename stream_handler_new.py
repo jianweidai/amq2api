@@ -23,6 +23,7 @@ from models import (
     MessageStop,
     AssistantResponseEnd
 )
+from usage_tracker import record_usage
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ def _pending_tag_suffix(buffer: str, tag: str) -> int:
 class AmazonQStreamHandler:
     """Amazon Q Event Stream 处理器"""
 
-    def __init__(self, model: str = "claude-sonnet-4.5", request_data: Optional[dict] = None):
+    def __init__(self, model: str = "claude-sonnet-4.5", request_data: Optional[dict] = None, account_id: Optional[str] = None, channel: str = "amazonq"):
         # 响应文本累积缓冲区
         self.response_buffer: list[str] = []
 
@@ -64,6 +65,10 @@ class AmazonQStreamHandler:
 
         # 原始请求的 model
         self.model: str = model
+        
+        # 账号信息（用于 token 统计）
+        self.account_id: Optional[str] = account_id
+        self.channel: str = channel
 
         # 输入 token 数量(小模型返回0避免累积)
         is_small_model = self._is_small_model_request(request_data)
@@ -318,6 +323,18 @@ class AmazonQStreamHandler:
             output_tokens = self._count_tokens(full_text_response + full_tool_inputs)
             
             logger.info(f"Token 统计 - 输入: {self.input_tokens}, 输出: {output_tokens} (文本: {len(full_text_response)} 字符, tool inputs: {len(full_tool_inputs)} 字符)")
+
+            # 记录 token 使用量到数据库
+            try:
+                record_usage(
+                    model=self.model,
+                    input_tokens=self.input_tokens,
+                    output_tokens=output_tokens,
+                    account_id=self.account_id,
+                    channel=self.channel
+                )
+            except Exception as e:
+                logger.error(f"记录 token 使用量失败: {e}")
 
             cli_event = build_claude_message_stop_event(
                 self.input_tokens,
@@ -584,7 +601,9 @@ class AmazonQStreamHandler:
 async def handle_amazonq_stream(
     upstream_bytes: AsyncIterator[bytes],
     model: str = "claude-sonnet-4.5",
-    request_data: Optional[dict] = None
+    request_data: Optional[dict] = None,
+    account_id: Optional[str] = None,
+    channel: str = "amazonq"
 ) -> AsyncIterator[str]:
     """
     处理 Amazon Q Event Stream 的便捷函数
@@ -593,10 +612,12 @@ async def handle_amazonq_stream(
         upstream_bytes: 上游字节流
         model: 原始请求的 model 名称
         request_data: 原始 Claude API 请求数据(用于估算 input tokens)
+        account_id: 账号 ID（用于 token 统计）
+        channel: 渠道 (amazonq/gemini)
 
     Yields:
         str: Claude 格式的 SSE 事件
     """
-    handler = AmazonQStreamHandler(model=model, request_data=request_data)
+    handler = AmazonQStreamHandler(model=model, request_data=request_data, account_id=account_id, channel=channel)
     async for event in handler.handle_stream(upstream_bytes):
         yield event

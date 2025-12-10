@@ -482,8 +482,9 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
                     raise HTTPException(status_code=502, detail=f"上游服务错误: {str(e)}")
 
         # 返回流式响应
+        account_id_for_tracking = account.get('id') if account else None
         async def claude_stream():
-            async for event in handle_amazonq_stream(byte_stream(), model=model, request_data=request_data):
+            async for event in handle_amazonq_stream(byte_stream(), model=model, request_data=request_data, account_id=account_id_for_tracking, channel="amazonq"):
                 yield event
 
         return StreamingResponse(
@@ -735,8 +736,9 @@ async def create_gemini_message(request: Request, _: bool = Depends(verify_api_k
                     raise HTTPException(status_code=502, detail=f"上游服务错误: {str(e)}")
 
         # 返回流式响应
+        gemini_account_id = account.get('id') if account else None
         async def claude_stream():
-            async for event in handle_gemini_stream(gemini_byte_stream(), model=claude_req.model):
+            async for event in handle_gemini_stream(gemini_byte_stream(), model=claude_req.model, account_id=gemini_account_id):
                 yield event
 
         return StreamingResponse(
@@ -1497,6 +1499,139 @@ def parse_claude_request(data: dict) -> ClaudeRequest:
         system=data.get("system"),
         thinking=data.get("thinking")
     )
+
+
+# ============================================================================
+# Token 使用量统计 API
+# ============================================================================
+
+from usage_tracker import get_usage_summary, get_recent_usage
+
+
+@app.get("/v1/usage")
+async def get_usage(
+    period: str = "day",
+    account_id: Optional[str] = None,
+    model: Optional[str] = None,
+    _: bool = Depends(verify_api_key)
+):
+    """
+    获取 token 使用量统计
+    
+    Query Parameters:
+        period: 统计周期 (hour/day/week/month/all)，默认 day
+        account_id: 按账号筛选（可选）
+        model: 按模型筛选（可选）
+    
+    Returns:
+        使用量汇总信息，包含总计和按模型分组的统计
+    """
+    return get_usage_summary(period=period, account_id=account_id, model=model)
+
+
+@app.get("/v1/usage/recent")
+async def get_recent_usage_records(
+    limit: int = 100,
+    _: bool = Depends(verify_api_key)
+):
+    """
+    获取最近的使用记录
+    
+    Query Parameters:
+        limit: 返回记录数量，默认 100
+    
+    Returns:
+        最近的使用记录列表
+    """
+    return get_recent_usage(limit=limit)
+
+
+# ============================================================================
+# Token 计数 API（兼容 Claude API）
+# ============================================================================
+
+# 初始化 tiktoken encoder（全局复用，避免重复加载）
+try:
+    import tiktoken
+    TIKTOKEN_ENCODING = tiktoken.get_encoding("cl100k_base")
+except Exception as e:
+    logger.warning(f"tiktoken 初始化失败: {e}")
+    TIKTOKEN_ENCODING = None
+
+
+def count_tokens_text(text: str) -> int:
+    """使用 tiktoken 统计 token 数量"""
+    if not text:
+        return 0
+    if TIKTOKEN_ENCODING:
+        return len(TIKTOKEN_ENCODING.encode(text))
+    # 回退到简化估算
+    return max(1, len(text) // 4)
+
+
+@app.post("/v1/messages/count_tokens")
+async def count_tokens_endpoint(request: Request, _: bool = Depends(verify_api_key)):
+    """
+    Token 计数端点（兼容 Claude API）
+    
+    用于预估请求的 input_tokens 数量，Claude Code 等客户端会调用此接口。
+    
+    Returns:
+        {"input_tokens": int}
+    """
+    try:
+        import json
+        request_data = await request.json()
+        
+        text_to_count = ""
+        
+        # 1. 统计 system prompt
+        system = request_data.get("system", "")
+        if system:
+            if isinstance(system, str):
+                text_to_count += system
+            elif isinstance(system, list):
+                for item in system:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        text_to_count += item.get("text", "")
+        
+        # 2. 统计 messages
+        messages = request_data.get("messages", [])
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                text_to_count += content
+            elif isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict):
+                        if item.get("type") == "text":
+                            text_to_count += item.get("text", "")
+                        elif item.get("type") == "tool_use":
+                            text_to_count += item.get("name", "")
+                            text_to_count += json.dumps(item.get("input", {}), ensure_ascii=False)
+                        elif item.get("type") == "tool_result":
+                            result_content = item.get("content", "")
+                            if isinstance(result_content, str):
+                                text_to_count += result_content
+                            elif isinstance(result_content, list):
+                                for rc in result_content:
+                                    if isinstance(rc, dict) and rc.get("type") == "text":
+                                        text_to_count += rc.get("text", "")
+        
+        # 3. 统计 tools 定义
+        tools = request_data.get("tools", [])
+        if tools:
+            text_to_count += json.dumps(tools, ensure_ascii=False)
+        
+        input_tokens = count_tokens_text(text_to_count)
+        
+        logger.debug(f"Token 计数: {input_tokens} tokens ({len(text_to_count)} 字符)")
+        
+        return {"input_tokens": input_tokens}
+    
+    except Exception as e:
+        logger.error(f"Token 计数失败: {e}")
+        return {"input_tokens": 0, "error": str(e)}
 
 
 if __name__ == "__main__":

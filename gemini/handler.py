@@ -4,18 +4,23 @@ Gemini 流式响应处理器
 """
 import json
 import logging
-from typing import AsyncIterator
+from typing import AsyncIterator, Optional
 
 logger = logging.getLogger(__name__)
 
 
-async def handle_gemini_stream(response_stream: AsyncIterator[bytes], model: str) -> AsyncIterator[str]:
+async def handle_gemini_stream(
+    response_stream: AsyncIterator[bytes], 
+    model: str,
+    account_id: Optional[str] = None
+) -> AsyncIterator[str]:
     """
     处理 Gemini SSE 流式响应，转换为 Claude SSE 格式
 
     Args:
         response_stream: Gemini 响应流
         model: 模型名称
+        account_id: 账号 ID（用于 token 统计）
 
     Yields:
         Claude 格式的 SSE 事件
@@ -266,6 +271,20 @@ async def handle_gemini_stream(response_stream: AsyncIterator[bytes], model: str
     yield format_sse_event("message_stop", {
         "type": "message_stop"
     })
+
+    # 记录 token 使用量到数据库
+    try:
+        from usage_tracker import record_usage
+        record_usage(
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            account_id=account_id,
+            channel="gemini"
+        )
+        logger.info(f"[Token统计] 已记录: model={model}, input={input_tokens}, output={output_tokens}")
+    except Exception as e:
+        logger.error(f"记录 token 使用量失败: {e}")
 
 
 def format_sse_event(event_type: str, data: dict) -> str:
