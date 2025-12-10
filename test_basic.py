@@ -4,8 +4,10 @@
 """
 import asyncio
 import sys
+import pytest
 
 
+@pytest.mark.asyncio
 async def test_config():
     """测试配置模块"""
     print("测试配置模块...")
@@ -22,6 +24,7 @@ async def test_config():
         return False
 
 
+@pytest.mark.asyncio
 async def test_models():
     """测试数据模型"""
     print("\n测试数据模型...")
@@ -45,6 +48,7 @@ async def test_models():
         return False
 
 
+@pytest.mark.asyncio
 async def test_converter():
     """测试请求转换"""
     print("\n测试请求转换...")
@@ -74,6 +78,7 @@ async def test_converter():
         return False
 
 
+@pytest.mark.asyncio
 async def test_parser():
     """测试事件解析"""
     print("\n测试事件解析...")

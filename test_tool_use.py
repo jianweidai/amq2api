@@ -4,10 +4,12 @@
 """
 import asyncio
 import json
+import pytest
 from stream_handler_new import AmazonQStreamHandler
 from parser import build_claude_tool_use_start_event, build_claude_tool_use_input_delta_event
 
 
+@pytest.mark.asyncio
 async def test_tool_use_event():
     """测试 tool use 事件处理"""
     print("=" * 60)
@@ -41,6 +43,7 @@ async def test_tool_use_event():
         print()
 
 
+@pytest.mark.asyncio
 async def test_content_block_index():
     """测试内容块索引递增"""
     print("=" * 60)
@@ -65,6 +68,7 @@ async def test_content_block_index():
     print(f"第三个内容块后 index: {handler.content_block_index}")
 
 
+@pytest.mark.asyncio
 async def test_build_events():
     """测试构建 Claude 事件"""
     print("=" * 60)

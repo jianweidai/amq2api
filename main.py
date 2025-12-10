@@ -38,6 +38,9 @@ from gemini.auth import GeminiTokenManager
 from gemini.converter import convert_claude_to_gemini
 from gemini.handler import handle_gemini_stream
 
+# Custom API 模块导入
+from custom_api.handler import handle_custom_api_request
+
 # Cache Manager 导入
 from cache_manager import CacheManager, CacheResult
 
@@ -139,7 +142,7 @@ class AccountCreate(BaseModel):
     accessToken: Optional[str] = None
     other: Optional[Dict[str, Any]] = None
     enabled: Optional[bool] = True
-    type: str = "amazonq"  # amazonq 或 gemini
+    type: str = "amazonq"  # amazonq, gemini, 或 custom_api
 
 
 class AccountUpdate(BaseModel):
@@ -191,6 +194,12 @@ async def health():
         }
 
 
+@app.post("/api/event_logging/batch")
+async def event_logging_batch():
+    """静默处理 Claude Code 的遥测请求"""
+    return {"status": "ok"}
+
+
 @app.post("/v1/messages")
 async def create_message(request: Request, _: bool = Depends(verify_api_key)):
     """
@@ -217,6 +226,9 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
             if account_type == 'gemini':
                 logger.info(f"指定账号为 Gemini 类型，转发到 Gemini 渠道")
                 return await create_gemini_message(request)
+            elif account_type == 'custom_api':
+                logger.info(f"指定账号为 Custom API 类型，转发到 Custom API 渠道")
+                return await create_custom_api_message(request)
         else:
             # 没有指定账号时，根据模型智能选择渠道
             channel = get_random_channel_by_model(model)
@@ -229,6 +241,10 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
             # 如果选择了 Gemini 渠道，转发到 /v1/gemini/messages
             if channel == 'gemini':
                 return await create_gemini_message(request)
+            
+            # 如果选择了 Custom API 渠道
+            if channel == 'custom_api':
+                return await create_custom_api_message(request)
 
         # 继续使用 Amazon Q 渠道的原有逻辑
 
@@ -834,6 +850,90 @@ async def create_gemini_message(request: Request, _: bool = Depends(verify_api_k
         raise HTTPException(status_code=500, detail=f"内部服务器错误: {str(e)}")
 
 
+@app.post("/v1/custom_api/messages")
+async def create_custom_api_message(request: Request, _: bool = Depends(verify_api_key)):
+    """
+    Custom API 端点
+    接收 Claude 格式的请求，根据账号配置转换为 OpenAI 或 Claude 格式并返回流式响应
+    """
+    try:
+        # 解析请求体
+        request_data = await request.json()
+
+        # 转换为 ClaudeRequest 对象
+        claude_req = parse_claude_request(request_data)
+
+        # 检查是否指定了特定账号（用于测试）
+        specified_account_id = request.headers.get("X-Account-ID")
+
+        if specified_account_id:
+            # 使用指定的账号
+            account = get_account(specified_account_id)
+            if not account:
+                raise HTTPException(status_code=404, detail=f"账号不存在: {specified_account_id}")
+            if not account.get('enabled'):
+                raise HTTPException(status_code=403, detail=f"账号已禁用: {specified_account_id}")
+            if account.get('type') != 'custom_api':
+                raise HTTPException(status_code=400, detail=f"账号类型不是 Custom API: {specified_account_id}")
+            logger.info(f"使用指定 Custom API 账号: {account.get('label', 'N/A')} (ID: {account['id']})")
+        else:
+            # 随机选择 Custom API 账号
+            account = get_random_account(account_type="custom_api")
+            if not account:
+                raise HTTPException(status_code=503, detail="没有可用的 Custom API 账号")
+            logger.info(f"使用随机 Custom API 账号: {account.get('label', 'N/A')} (ID: {account['id']})")
+
+        # 返回流式响应
+        custom_api_account_id = account.get('id')
+
+        # 处理 Prompt Caching 模拟
+        cache_creation_input_tokens = 0
+        cache_read_input_tokens = 0
+        
+        if _cache_manager is not None:
+            # 从请求中提取可缓存内容
+            cacheable_content, token_count = _cache_manager.extract_cacheable_content(request_data)
+            
+            if cacheable_content and token_count > 0:
+                # 计算缓存键并检查缓存
+                cache_key = _cache_manager.calculate_cache_key(cacheable_content)
+                cache_result = _cache_manager.check_cache(cache_key, token_count)
+                
+                cache_creation_input_tokens = cache_result.cache_creation_input_tokens
+                cache_read_input_tokens = cache_result.cache_read_input_tokens
+                
+                if cache_result.is_hit:
+                    logger.info(f"Custom API Prompt Cache 命中: {token_count} tokens (key: {cache_key[:16]}...)")
+                else:
+                    logger.info(f"Custom API Prompt Cache 未命中: {token_count} tokens (key: {cache_key[:16]}...)")
+
+        async def custom_api_stream():
+            async for event in handle_custom_api_request(
+                account=account,
+                claude_req=claude_req,
+                request_data=request_data,
+                cache_creation_input_tokens=cache_creation_input_tokens,
+                cache_read_input_tokens=cache_read_input_tokens
+            ):
+                yield event
+
+        return StreamingResponse(
+            custom_api_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"处理 Custom API 请求时发生错误: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"内部服务器错误: {str(e)}")
+
+
 # 账号管理 API 端点
 @app.get("/v2/accounts")
 async def list_accounts(_: bool = Depends(verify_admin_key)):
@@ -1062,6 +1162,193 @@ async def get_account_quota(account_id: str, _: bool = Depends(verify_admin_key)
         raise HTTPException(status_code=500, detail=f"获取配额信息失败: {str(e)}")
 
 
+@app.post("/v2/accounts/{account_id}/test")
+async def test_custom_api_account(account_id: str, _: bool = Depends(verify_admin_key)):
+    """
+    测试 Custom API 账号连接
+    
+    发送一个简单的测试请求到配置的 API，验证连接和认证是否正常。
+    
+    Requirements: 6.1, 6.2, 6.3
+    """
+    try:
+        account = get_account(account_id)
+        if not account:
+            raise HTTPException(status_code=404, detail="账号不存在")
+
+        account_type = account.get("type", "amazonq")
+        if account_type != "custom_api":
+            raise HTTPException(status_code=400, detail="只有 Custom API 账号支持此测试端点")
+
+        # 从账号配置中提取信息
+        other = account.get("other", {})
+        if isinstance(other, str):
+            import json as json_module
+            try:
+                other = json_module.loads(other)
+            except json_module.JSONDecodeError:
+                other = {}
+
+        api_format = other.get("format", "openai")
+        api_base = other.get("api_base", "")
+        model = other.get("model", "gpt-4o")
+        api_key = account.get("clientSecret", "")
+
+        if not api_base:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": "API Base URL 未配置"
+                }
+            )
+
+        if not api_key:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error": "API Key 未配置"
+                }
+            )
+
+        logger.info(f"测试 Custom API 账号: {account_id}, format={api_format}, api_base={api_base}, model={model}")
+
+        # 根据 API 格式发送测试请求
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            if api_format == "claude":
+                # Claude 格式测试
+                api_url = f"{api_base.rstrip('/')}/v1/messages"
+                headers = {
+                    "Content-Type": "application/json",
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                }
+                test_request = {
+                    "model": model,
+                    "max_tokens": 10,
+                    "messages": [{"role": "user", "content": "Hi"}]
+                }
+            else:
+                # OpenAI 格式测试
+                api_url = f"{api_base.rstrip('/')}/chat/completions"
+                headers = {
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                }
+                test_request = {
+                    "model": model,
+                    "max_tokens": 10,
+                    "messages": [{"role": "user", "content": "Hi"}]
+                }
+
+            try:
+                response = await client.post(api_url, json=test_request, headers=headers)
+                
+                if response.status_code == 200:
+                    response_data = response.json()
+                    
+                    # 提取响应内容用于显示
+                    if api_format == "claude":
+                        # Claude 格式响应
+                        content = response_data.get("content", [])
+                        response_text = ""
+                        for block in content:
+                            if block.get("type") == "text":
+                                response_text += block.get("text", "")
+                        model_used = response_data.get("model", model)
+                    else:
+                        # OpenAI 格式响应
+                        choices = response_data.get("choices", [])
+                        response_text = ""
+                        if choices:
+                            message = choices[0].get("message", {})
+                            response_text = message.get("content", "")
+                        model_used = response_data.get("model", model)
+
+                    return JSONResponse(content={
+                        "success": True,
+                        "message": "连接测试成功",
+                        "details": {
+                            "api_base": api_base,
+                            "model": model_used,
+                            "format": api_format,
+                            "response_preview": response_text[:100] if response_text else "(无响应内容)"
+                        }
+                    })
+                else:
+                    # API 返回错误
+                    error_text = response.text
+                    try:
+                        error_json = response.json()
+                        if api_format == "claude":
+                            error_message = error_json.get("error", {}).get("message", error_text)
+                        else:
+                            error_message = error_json.get("error", {}).get("message", error_text)
+                    except Exception:
+                        error_message = error_text
+
+                    return JSONResponse(
+                        status_code=response.status_code,
+                        content={
+                            "success": False,
+                            "error": f"API 返回错误 ({response.status_code}): {error_message}",
+                            "details": {
+                                "api_base": api_base,
+                                "model": model,
+                                "format": api_format,
+                                "status_code": response.status_code
+                            }
+                        }
+                    )
+
+            except httpx.TimeoutException:
+                return JSONResponse(
+                    status_code=504,
+                    content={
+                        "success": False,
+                        "error": "连接超时：无法在 30 秒内连接到 API",
+                        "details": {
+                            "api_base": api_base,
+                            "model": model,
+                            "format": api_format
+                        }
+                    }
+                )
+            except httpx.ConnectError as e:
+                return JSONResponse(
+                    status_code=502,
+                    content={
+                        "success": False,
+                        "error": f"连接失败：无法连接到 API ({str(e)})",
+                        "details": {
+                            "api_base": api_base,
+                            "model": model,
+                            "format": api_format
+                        }
+                    }
+                )
+            except httpx.RequestError as e:
+                return JSONResponse(
+                    status_code=502,
+                    content={
+                        "success": False,
+                        "error": f"请求错误：{str(e)}",
+                        "details": {
+                            "api_base": api_base,
+                            "model": model,
+                            "format": api_format
+                        }
+                    }
+                )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"测试 Custom API 账号失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"测试失败: {str(e)}")
+
+
 # 管理页面
 @app.get("/admin", response_class=FileResponse)
 async def admin_page(key: Optional[str] = None):
@@ -1130,9 +1417,12 @@ async def gemini_oauth_callback_post(request: Request):
         if not code:
             raise HTTPException(status_code=400, detail="缺少授权码")
 
-        # 使用固定的 client credentials
-        client_id = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
-        client_secret = "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"
+        # 从环境变量读取 client credentials
+        client_id = os.getenv("GEMINI_DONATE_CLIENT_ID", "")
+        client_secret = os.getenv("GEMINI_DONATE_CLIENT_SECRET", "")
+        
+        if not client_id or not client_secret:
+            raise HTTPException(status_code=500, detail="服务器未配置 Gemini OAuth 凭证")
 
         # 交换授权码获取 tokens
         async with httpx.AsyncClient() as client:
@@ -1237,9 +1527,12 @@ async def gemini_oauth_callback(code: Optional[str] = None, error: Optional[str]
 
     from fastapi.responses import RedirectResponse
     try:
-        # 使用固定的 client credentials
-        client_id = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
-        client_secret = "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"
+        # 从环境变量读取 client credentials
+        client_id = os.getenv("GEMINI_DONATE_CLIENT_ID", "")
+        client_secret = os.getenv("GEMINI_DONATE_CLIENT_SECRET", "")
+        
+        if not client_id or not client_secret:
+            raise HTTPException(status_code=500, detail="服务器未配置 Gemini OAuth 凭证")
 
         # 交换授权码获取 tokens
         async with httpx.AsyncClient() as client:
@@ -1340,6 +1633,22 @@ async def gemini_oauth_callback(code: Optional[str] = None, error: Optional[str]
         logger.error(f"处理 OAuth 回调失败: {e}")
         from urllib.parse import quote
         return RedirectResponse(url=f"/donate?error={quote(str(e))}", status_code=302)
+
+
+# 获取 Gemini OAuth 配置（仅返回 client_id，不暴露 secret）
+@app.get("/api/gemini/oauth-config")
+async def get_gemini_oauth_config():
+    """获取 Gemini OAuth 配置"""
+    client_id = os.getenv("GEMINI_DONATE_CLIENT_ID", "")
+    if not client_id:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "OAuth 未配置", "clientId": None}
+        )
+    return {
+        "clientId": client_id,
+        "redirectUri": "http://localhost:64312/oauth-callback"
+    }
 
 
 # 获取 Gemini 账号列表和统计信息

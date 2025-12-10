@@ -1,0 +1,143 @@
+# Implementation Plan
+
+- [x] 1. Extend account manager for custom_api type
+  - [x] 1.1 Update `get_random_channel_by_model` to include custom_api in channel selection
+    - Add custom_api to the channel selection logic
+    - Weight by number of enabled custom_api accounts
+    - _Requirements: 2.1, 2.2_
+  - [x] 1.2 Update `list_enabled_accounts` to support custom_api type filter
+    - Ensure existing filter logic works with new type
+    - _Requirements: 2.3_
+  - [ ]* 1.3 Write property test for load balancing inclusion
+    - **Property 4: Load Balancing Inclusion**
+    - **Validates: Requirements 2.1**
+  - [ ]* 1.4 Write property test for disabled account exclusion
+    - **Property 5: Disabled Account Exclusion**
+    - **Validates: Requirements 2.3**
+
+- [x] 2. Create custom_api converter module
+  - [x] 2.1 Create `custom_api/__init__.py` and `custom_api/converter.py`
+    - Set up module structure
+    - _Requirements: 3.1_
+  - [x] 2.2 Implement `convert_claude_to_openai_request` function
+    - Convert Claude request structure to OpenAI chat completion format
+    - Handle system prompt conversion
+    - _Requirements: 3.1, 3.2_
+  - [x] 2.3 Implement `convert_claude_messages_to_openai` function
+    - Convert text messages (string and content blocks)
+    - Convert tool_use to tool_calls
+    - Convert tool_result to tool messages
+    - _Requirements: 3.2, 3.4, 3.5_
+  - [x] 2.4 Implement `convert_claude_tools_to_openai` function
+    - Convert Claude tool definitions to OpenAI function format
+    - _Requirements: 3.3_
+  - [ ]* 2.5 Write property test for message conversion
+    - **Property 6: Claude to OpenAI Message Conversion**
+    - **Validates: Requirements 3.2, 3.4, 3.5**
+  - [ ]* 2.6 Write property test for tool conversion
+    - **Property 7: Claude to OpenAI Tool Conversion**
+    - **Validates: Requirements 3.3**
+
+- [x] 3. Implement OpenAI to Claude response conversion
+  - [x] 3.1 Implement `convert_openai_stream_to_claude` async generator
+    - Parse OpenAI SSE events
+    - Generate Claude SSE events
+    - Handle streaming state management
+    - _Requirements: 4.1_
+  - [x] 3.2 Implement `convert_openai_delta_to_claude_events` function
+    - Convert text deltas to content_block_delta
+    - Convert tool_calls to tool_use blocks
+    - _Requirements: 4.2, 4.3_
+  - [x] 3.3 Implement `convert_openai_usage_to_claude` function
+    - Map prompt_tokens to input_tokens
+    - Map completion_tokens to output_tokens
+    - _Requirements: 4.4_
+  - [x] 3.4 Implement `convert_openai_error_to_claude` function
+    - Convert OpenAI error format to Claude error format
+    - _Requirements: 7.1_
+  - [ ]* 3.5 Write property test for delta conversion
+    - **Property 8: OpenAI to Claude Delta Conversion**
+    - **Validates: Requirements 4.1, 4.2, 4.3**
+  - [ ]* 3.6 Write property test for usage conversion
+    - **Property 9: Usage Statistics Conversion**
+    - **Validates: Requirements 4.4**
+  - [ ]* 3.7 Write property test for error conversion
+    - **Property 12: Error Format Conversion**
+    - **Validates: Requirements 7.1**
+
+- [x] 4. Checkpoint - Ensure all converter tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 5. Create custom_api handler module
+  - [x] 5.1 Create `custom_api/handler.py`
+    - Set up handler module structure
+    - _Requirements: 4.1_
+  - [x] 5.2 Implement `handle_custom_api_request` function
+    - Determine format (openai/claude)
+    - Route to appropriate conversion path
+    - _Requirements: 3.1, 3.6_
+  - [x] 5.3 Implement `handle_openai_format_stream` async generator
+    - Send converted request to OpenAI-format API
+    - Convert streaming response to Claude format
+    - Handle errors and timeouts
+    - _Requirements: 4.1, 7.2, 7.3_
+  - [x] 5.4 Implement `handle_claude_format_stream` async generator
+    - Forward request to Claude-format API (passthrough)
+    - Forward response without conversion
+    - _Requirements: 3.6, 4.5_
+  - [ ]* 5.5 Write property test for passthrough mode
+    - **Property 10: Claude Format Passthrough**
+    - **Validates: Requirements 3.6, 4.5**
+
+- [x] 6. Integrate custom_api into main router
+  - [x] 6.1 Add custom_api route handling in `/v1/messages` endpoint
+    - Check for custom_api channel selection
+    - Route to custom_api handler
+    - _Requirements: 2.1_
+  - [x] 6.2 Create `create_custom_api_message` endpoint function
+    - Similar structure to `create_gemini_message`
+    - Handle account selection and request processing
+    - _Requirements: 2.1, 3.1_
+  - [x] 6.3 Add custom_api account type to `AccountCreate` model
+    - Update Pydantic model to accept custom_api type
+    - _Requirements: 1.2_
+
+- [x] 7. Checkpoint - Ensure backend integration works
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 8. Update frontend for custom_api account management
+  - [x] 8.1 Add custom_api option to account type selector
+    - Add "Custom API" option to the dropdown
+    - _Requirements: 1.1_
+  - [x] 8.2 Create custom_api specific form fields
+    - Add fields: API Base, Model, Format (OpenAI/Claude)
+    - Show/hide based on account type selection
+    - _Requirements: 1.1_
+  - [x] 8.3 Update account card rendering for custom_api type
+    - Add distinct visual indicator (chip color/icon)
+    - Display API Base and Model in account details
+    - _Requirements: 1.3_
+  - [x] 8.4 Update edit modal for custom_api accounts
+    - Allow editing of custom_api specific fields
+    - _Requirements: 1.4_
+  - [x] 8.5 Add test functionality for custom_api accounts
+    - Implement test button handler
+    - Display test results
+    - _Requirements: 6.1, 6.2, 6.3_
+
+- [x] 9. Add backend test endpoint for custom_api
+  - [x] 9.1 Create `/v2/accounts/{id}/test` endpoint for custom_api
+    - Send test request to configured API
+    - Return success/failure with details
+    - _Requirements: 6.1, 6.2, 6.3_
+
+- [x] 10. Implement tool call ID preservation
+  - [x] 10.1 Ensure tool_use_id mapping is preserved in conversion
+    - Track ID mapping through request/response cycle
+    - _Requirements: 5.1, 5.4_
+  - [ ]* 10.2 Write property test for tool ID preservation
+    - **Property 11: Tool ID Preservation**
+    - **Validates: Requirements 5.4**
+
+- [x] 11. Final Checkpoint - Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.

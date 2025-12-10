@@ -291,7 +291,7 @@ def get_random_channel_by_model(model: str) -> Optional[str]:
         model: 请求的模型名称
 
     Returns:
-        渠道名称 ('amazonq' 或 'gemini')，如果没有可用账号则返回 None
+        渠道名称 ('amazonq', 'gemini', 或 'custom_api')，如果没有可用账号则返回 None
     """
     # Gemini 独占模型
     gemini_only_models = [
@@ -319,29 +319,29 @@ def get_random_channel_by_model(model: str) -> Optional[str]:
             return 'amazonq'
         return None
 
-    # 对于其他模型，按账号数量加权随机选择
+    # 对于其他模型，按账号数量加权随机选择（包括 custom_api）
     amazonq_accounts = list_enabled_accounts(account_type='amazonq')
     gemini_accounts = list_enabled_accounts(account_type='gemini')
+    custom_api_accounts = list_enabled_accounts(account_type='custom_api')
 
     amazonq_count = len(amazonq_accounts)
     gemini_count = len(gemini_accounts)
+    custom_api_count = len(custom_api_accounts)
 
-    if amazonq_count == 0 and gemini_count == 0:
+    total = amazonq_count + gemini_count + custom_api_count
+
+    if total == 0:
         return None
 
-    if amazonq_count == 0:
-        return 'gemini'
-    if gemini_count == 0:
-        return 'amazonq'
-
     # 按账号数量加权随机选择
-    total = amazonq_count + gemini_count
     rand = random.randint(1, total)
 
     if rand <= amazonq_count:
         return 'amazonq'
-    else:
+    elif rand <= amazonq_count + gemini_count:
         return 'gemini'
+    else:
+        return 'custom_api'
 
 
 def create_account(

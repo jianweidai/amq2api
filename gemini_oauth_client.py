@@ -11,8 +11,10 @@ from urllib.parse import urlencode
 import httpx
 
 # Antigravity 应用的 OAuth 配置
-GOOGLE_CLIENT_ID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
-GOOGLE_CLIENT_SECRET = "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"
+# 从环境变量读取，如果未设置则使用默认值（需要用户自行配置）
+import os
+GOOGLE_CLIENT_ID = os.getenv("GEMINI_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GEMINI_CLIENT_SECRET", "")
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 CALLBACK_PORT = 63902
