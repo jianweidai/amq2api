@@ -135,7 +135,7 @@ def _mysql_ensure_db():
                     id VARCHAR(36) PRIMARY KEY,
                     label VARCHAR(255),
                     clientId VARCHAR(255),
-                    clientSecret VARCHAR(512),
+                    clientSecret TEXT,
                     refreshToken TEXT,
                     accessToken TEXT,
                     other LONGTEXT,
