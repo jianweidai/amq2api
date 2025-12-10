@@ -102,6 +102,7 @@
     .chip.danger { color: var(--danger); border-color: var(--danger); }
     .chip.amazonq { color: #ff9900; border-color: #ff9900; }
     .chip.gemini { color: #4285f4; border-color: #4285f4; }
+    .chip.custom_api { color: #9c27b0; border-color: #9c27b0; }
     .list { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
     .card {
       background: var(--bg);
@@ -147,7 +148,7 @@
 <body>
   <div class="container">
     <h1>账号管理</h1>
-    <p style="color: var(--muted); margin-bottom: 32px;">管理 Amazon Q 和 Gemini 账号</p>
+    <p style="color: var(--muted); margin-bottom: 32px;">管理 Amazon Q、Gemini 和 Custom API 账号</p>
 
     <div class="panel">
       <h2>系统状态</h2>
@@ -165,6 +166,7 @@
           <option value="all">全部类型</option>
           <option value="amazonq">Amazon Q</option>
           <option value="gemini">Gemini</option>
+          <option value="custom_api">Custom API</option>
         </select>
         <input id="filter_start_date" type="date" onchange="applyFilters()" placeholder="开始日期" style="max-width:150px" />
         <input id="filter_end_date" type="date" onchange="applyFilters()" placeholder="结束日期" style="max-width:150px" />
@@ -196,6 +198,7 @@
           <select id="new_type" onchange="toggleAccountFields()">
             <option value="amazonq">Amazon Q</option>
             <option value="gemini">Gemini</option>
+            <option value="custom_api">Custom API</option>
           </select>
         </div>
         <div class="field">
@@ -232,6 +235,25 @@
           <div class="field">
             <label>API Endpoint (可选)</label>
             <input id="new_api_endpoint" placeholder="https://daily-cloudcode-pa.sandbox.googleapis.com" />
+          </div>
+        </div>
+      </div>
+      <div id="custom_api_fields" style="display:none">
+        <div class="row">
+          <div class="field">
+            <label>API Base URL</label>
+            <input id="new_api_base" placeholder="https://api.openai.com/v1" />
+          </div>
+          <div class="field">
+            <label>Model</label>
+            <input id="new_model" placeholder="gpt-4o" />
+          </div>
+          <div class="field" style="max-width:150px">
+            <label>API Format</label>
+            <select id="new_format">
+              <option value="openai">OpenAI</option>
+              <option value="claude">Claude</option>
+            </select>
           </div>
         </div>
       </div>
@@ -294,6 +316,25 @@ function authFetch(url, options = {}) {
 function toggleAccountFields() {
   const type = document.getElementById('new_type').value;
   document.getElementById('gemini_fields').style.display = type === 'gemini' ? 'block' : 'none';
+  document.getElementById('custom_api_fields').style.display = type === 'custom_api' ? 'block' : 'none';
+  
+  // Show/hide standard OAuth fields based on account type
+  const clientIdField = document.getElementById('new_clientId').closest('.field');
+  const refreshTokenField = document.getElementById('new_refreshToken').closest('.field');
+  const accessTokenField = document.getElementById('new_accessToken').closest('.field');
+  
+  if (type === 'custom_api') {
+    // For custom_api, clientSecret is the API Key, hide other OAuth fields
+    clientIdField.style.display = 'none';
+    refreshTokenField.style.display = 'none';
+    accessTokenField.style.display = 'none';
+    document.getElementById('new_clientSecret').closest('.field').querySelector('label').textContent = 'API Key';
+  } else {
+    clientIdField.style.display = 'flex';
+    refreshTokenField.style.display = 'flex';
+    accessTokenField.style.display = 'flex';
+    document.getElementById('new_clientSecret').closest('.field').querySelector('label').textContent = 'Client Secret';
+  }
 }
 
 function toggleImportFormat() {
@@ -376,7 +417,7 @@ function renderAccounts(list) {
 
     const typeChip = document.createElement('span');
     typeChip.className = `chip ${acc.type || 'amazonq'}`;
-    typeChip.textContent = acc.type === 'gemini' ? 'Gemini' : 'Amazon Q';
+    typeChip.textContent = acc.type === 'gemini' ? 'Gemini' : (acc.type === 'custom_api' ? '🔌 Custom API' : 'Amazon Q');
 
     const idChip = document.createElement('span');
     idChip.className = 'chip mono';
@@ -425,11 +466,17 @@ function renderAccounts(list) {
       row('封禁时间', other.suspended_at || 'N/A');
     }
     row('创建时间', acc.created_at || 'N/A');
-    row('刷新状态', acc.last_refresh_status || 'never');
-    row('刷新时间', acc.last_refresh_time || 'N/A');
-    row('Client ID', acc.clientId);
-    if (acc.type === 'gemini' && other.project) {
-      row('Project ID', other.project);
+    if (acc.type === 'custom_api') {
+      row('API Base', other.api_base || 'N/A');
+      row('Model', other.model || 'N/A');
+      row('Format', other.format === 'claude' ? 'Claude' : 'OpenAI');
+    } else {
+      row('刷新状态', acc.last_refresh_status || 'never');
+      row('刷新时间', acc.last_refresh_time || 'N/A');
+      row('Client ID', acc.clientId);
+      if (acc.type === 'gemini' && other.project) {
+        row('Project ID', other.project);
+      }
     }
     card.appendChild(meta);
 
@@ -441,14 +488,15 @@ function renderAccounts(list) {
     testBtn.className = 'btn-secondary';
     testBtn.textContent = '测试';
     testBtn.onclick = () => testSingleAccount(acc.id);
-
-    const refreshBtn = document.createElement('button');
-    refreshBtn.className = 'btn-warning';
-    refreshBtn.textContent = '刷新Token';
-    refreshBtn.onclick = () => refreshAccount(acc.id);
-
     actions.appendChild(testBtn);
-    actions.appendChild(refreshBtn);
+
+    if (acc.type !== 'custom_api') {
+      const refreshBtn = document.createElement('button');
+      refreshBtn.className = 'btn-warning';
+      refreshBtn.textContent = '刷新Token';
+      refreshBtn.onclick = () => refreshAccount(acc.id);
+      actions.appendChild(refreshBtn);
+    }
 
     if (acc.type === 'gemini') {
       const quotaBtn = document.createElement('button');
@@ -591,15 +639,30 @@ async function createAccount() {
     const api_endpoint = document.getElementById('new_api_endpoint').value.trim();
     if (project) other.project = project;
     if (api_endpoint) other.api_endpoint = api_endpoint;
+  } else if (type === 'custom_api') {
+    const api_base = document.getElementById('new_api_base').value.trim();
+    const model = document.getElementById('new_model').value.trim();
+    const format = document.getElementById('new_format').value;
+    if (!api_base) {
+      alert('请输入 API Base URL');
+      return;
+    }
+    if (!model) {
+      alert('请输入 Model');
+      return;
+    }
+    other.api_base = api_base;
+    other.model = model;
+    other.format = format;
   }
 
   const body = {
     type,
     label: document.getElementById('new_label').value.trim() || null,
-    clientId: document.getElementById('new_clientId').value.trim(),
+    clientId: type === 'custom_api' ? '' : document.getElementById('new_clientId').value.trim(),
     clientSecret: document.getElementById('new_clientSecret').value.trim(),
-    refreshToken: document.getElementById('new_refreshToken').value.trim() || null,
-    accessToken: document.getElementById('new_accessToken').value.trim() || null,
+    refreshToken: type === 'custom_api' ? null : (document.getElementById('new_refreshToken').value.trim() || null),
+    accessToken: type === 'custom_api' ? null : (document.getElementById('new_accessToken').value.trim() || null),
     other: Object.keys(other).length > 0 ? other : null,
     enabled: document.getElementById('new_enabled').checked
   };
@@ -620,6 +683,9 @@ async function createAccount() {
     document.getElementById('new_accessToken').value = '';
     document.getElementById('new_project').value = '';
     document.getElementById('new_api_endpoint').value = '';
+    document.getElementById('new_api_base').value = '';
+    document.getElementById('new_model').value = '';
+    document.getElementById('new_format').value = 'openai';
   } catch(e) {
     alert('创建失败：' + e);
   }
@@ -666,12 +732,22 @@ async function editAccount(acc) {
   html += '<h3 style="margin-top:0">编辑账号</h3>';
   html += '<div style="display:flex;flex-direction:column;gap:12px">';
   html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">标签</label><input id="edit_label" value="${acc.label || ''}" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></div>`;
-  html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">Client ID</label><input id="edit_clientId" value="${acc.clientId}" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></div>`;
-  html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">Client Secret</label><input id="edit_clientSecret" type="password" value="${acc.clientSecret}" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></div>`;
-  html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">Refresh Token</label><input id="edit_refreshToken" type="password" value="${acc.refreshToken || ''}" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></div>`;
-  if (acc.type === 'gemini') {
-    html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">Project ID</label><input id="edit_project" value="${other.project || ''}" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></div>`;
-    html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">API Endpoint</label><input id="edit_api_endpoint" value="${other.api_endpoint || ''}" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></div>`;
+  
+  if (acc.type === 'custom_api') {
+    // Custom API specific fields
+    html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">API Key</label><input id="edit_clientSecret" type="password" value="${acc.clientSecret}" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></div>`;
+    html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">API Base URL</label><input id="edit_api_base" value="${other.api_base || ''}" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></div>`;
+    html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">Model</label><input id="edit_model" value="${other.model || ''}" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></div>`;
+    html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">API Format</label><select id="edit_format" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"><option value="openai" ${other.format !== 'claude' ? 'selected' : ''}>OpenAI</option><option value="claude" ${other.format === 'claude' ? 'selected' : ''}>Claude</option></select></div>`;
+  } else {
+    // Standard OAuth fields
+    html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">Client ID</label><input id="edit_clientId" value="${acc.clientId}" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></div>`;
+    html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">Client Secret</label><input id="edit_clientSecret" type="password" value="${acc.clientSecret}" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></div>`;
+    html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">Refresh Token</label><input id="edit_refreshToken" type="password" value="${acc.refreshToken || ''}" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></div>`;
+    if (acc.type === 'gemini') {
+      html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">Project ID</label><input id="edit_project" value="${other.project || ''}" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></div>`;
+      html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">API Endpoint</label><input id="edit_api_endpoint" value="${other.api_endpoint || ''}" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></div>`;
+    }
   }
   html += '</div></div>';
 
@@ -685,29 +761,51 @@ async function editAccount(acc) {
     try {
       const patch = {
         label: document.getElementById('edit_label').value.trim() || null,
-        clientId: document.getElementById('edit_clientId').value.trim(),
-        clientSecret: document.getElementById('edit_clientSecret').value.trim(),
-        refreshToken: document.getElementById('edit_refreshToken').value.trim() || null
+        clientSecret: document.getElementById('edit_clientSecret').value.trim()
       };
 
-      if (acc.type === 'gemini') {
+      if (acc.type === 'custom_api') {
         const newOther = { ...other };
-        const project = document.getElementById('edit_project').value.trim();
-        const api_endpoint = document.getElementById('edit_api_endpoint').value.trim();
+        const api_base = document.getElementById('edit_api_base').value.trim();
+        const model = document.getElementById('edit_model').value.trim();
+        const format = document.getElementById('edit_format').value;
 
-        if (project) {
-          newOther.project = project;
-        } else {
-          delete newOther.project;
+        if (!api_base) {
+          alert('请输入 API Base URL');
+          return;
+        }
+        if (!model) {
+          alert('请输入 Model');
+          return;
         }
 
-        if (api_endpoint) {
-          newOther.api_endpoint = api_endpoint;
-        } else {
-          delete newOther.api_endpoint;
-        }
-
+        newOther.api_base = api_base;
+        newOther.model = model;
+        newOther.format = format;
         patch.other = newOther;
+      } else {
+        patch.clientId = document.getElementById('edit_clientId').value.trim();
+        patch.refreshToken = document.getElementById('edit_refreshToken').value.trim() || null;
+
+        if (acc.type === 'gemini') {
+          const newOther = { ...other };
+          const project = document.getElementById('edit_project').value.trim();
+          const api_endpoint = document.getElementById('edit_api_endpoint').value.trim();
+
+          if (project) {
+            newOther.project = project;
+          } else {
+            delete newOther.project;
+          }
+
+          if (api_endpoint) {
+            newOther.api_endpoint = api_endpoint;
+          } else {
+            delete newOther.api_endpoint;
+          }
+
+          patch.other = newOther;
+        }
       }
 
       await updateAccount(acc.id, patch);
@@ -872,6 +970,10 @@ async function exportAccounts() {
 
     const lines = accounts.map(acc => {
       const other = acc.other || {};
+      if (acc.type === 'custom_api') {
+        // Custom API format: type|label|clientSecret(apiKey)|api_base|model|format
+        return `${acc.type}|${acc.label || ''}|${acc.clientSecret}|||${other.api_base || ''}|${other.model || ''}|${other.format || 'openai'}`;
+      }
       return `${acc.type || 'amazonq'}|${acc.label || ''}|${acc.clientId}|${acc.clientSecret}|${acc.refreshToken || ''}|${acc.accessToken || ''}|${other.project || ''}|${other.api_endpoint || ''}`;
     });
 
@@ -902,7 +1004,41 @@ async function testSingleAccount(accountId) {
   document.getElementById('test_results').innerHTML = '';
 
   try {
-    const endpoint = acc.type === 'gemini' ? '/v1/gemini/messages' : '/v1/messages';
+    // Custom API accounts use dedicated test endpoint
+    if (acc.type === 'custom_api') {
+      const headers = { 'content-type': 'application/json' };
+      const adminKey = getAdminKey();
+      if (adminKey) headers['x-admin-key'] = adminKey;
+
+      const r = await fetch(`/v2/accounts/${accountId}/test`, {
+        method: 'POST',
+        headers
+      });
+
+      const result = await r.json();
+
+      if (result.success) {
+        setTestStatus(`测试成功`, true);
+        const details = result.details || {};
+        document.getElementById('test_results').innerHTML = `<div class="card"><div style="color:var(--success)">✓ ${acc.label}</div><div style="font-size:12px;margin-top:8px"><strong>API:</strong> ${details.api_base}<br><strong>模型:</strong> ${details.model}<br><strong>格式:</strong> ${details.format}<br><strong>响应:</strong> ${details.response_preview || '(无)'}</div></div>`;
+      } else {
+        setTestStatus(`测试失败`, false);
+        const details = result.details || {};
+        document.getElementById('test_results').innerHTML = `<div class="card"><div style="color:var(--danger)">✗ ${acc.label}</div><div style="font-size:12px;margin-top:8px">${result.error}<br><strong>API:</strong> ${details.api_base || 'N/A'}<br><strong>模型:</strong> ${details.model || 'N/A'}</div></div>`;
+      }
+      return;
+    }
+
+    // Determine endpoint and model based on account type
+    let endpoint, model;
+    if (acc.type === 'gemini') {
+      endpoint = '/v1/gemini/messages';
+      model = 'gemini-3-pro-high';
+    } else {
+      endpoint = '/v1/messages';
+      model = 'claude-sonnet-4';
+    }
+
     const headers = {
       'content-type': 'application/json',
       'X-Account-ID': accountId
@@ -914,7 +1050,7 @@ async function testSingleAccount(accountId) {
       method: 'POST',
       headers,
       body: JSON.stringify({
-        model: acc.type === 'gemini' ? 'gemini-3-pro-high' : 'claude-sonnet-4',
+        model: model,
         max_tokens: 50,
         messages: [{ role: 'user', content: msg }]
       })
@@ -978,7 +1114,20 @@ async function testSelectedAccounts() {
 
   for (const acc of toTest) {
     try {
-      const endpoint = acc.type === 'gemini' ? '/v1/gemini/messages' : '/v1/messages';
+      // Determine endpoint and model based on account type
+      let endpoint, model;
+      if (acc.type === 'gemini') {
+        endpoint = '/v1/gemini/messages';
+        model = 'gemini-3-pro-high';
+      } else if (acc.type === 'custom_api') {
+        endpoint = '/v1/messages';
+        const other = acc.other || {};
+        model = other.model || 'gpt-4o';
+      } else {
+        endpoint = '/v1/messages';
+        model = 'claude-sonnet-4';
+      }
+
       const headers = {
         'content-type': 'application/json',
         'X-Account-ID': acc.id
@@ -990,7 +1139,7 @@ async function testSelectedAccounts() {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          model: acc.type === 'gemini' ? 'gemini-3-pro-high' : 'claude-sonnet-4',
+          model: model,
           max_tokens: 50,
           messages: [{ role: 'user', content: msg }]
         })
@@ -1059,7 +1208,20 @@ async function testAllAccounts() {
 
   for (const acc of enabled) {
     try {
-      const endpoint = acc.type === 'gemini' ? '/v1/gemini/messages' : '/v1/messages';
+      // Determine endpoint and model based on account type
+      let endpoint, model;
+      if (acc.type === 'gemini') {
+        endpoint = '/v1/gemini/messages';
+        model = 'gemini-3-pro-high';
+      } else if (acc.type === 'custom_api') {
+        endpoint = '/v1/messages';
+        const other = acc.other || {};
+        model = other.model || 'gpt-4o';
+      } else {
+        endpoint = '/v1/messages';
+        model = 'claude-sonnet-4';
+      }
+
       const headers = {
         'content-type': 'application/json',
         'X-Account-ID': acc.id
@@ -1071,7 +1233,7 @@ async function testAllAccounts() {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          model: acc.type === 'gemini' ? 'gemini-3-pro-high' : 'claude-sonnet-4',
+          model: model,
           max_tokens: 50,
           messages: [{ role: 'user', content: msg }]
         })

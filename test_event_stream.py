@@ -4,8 +4,10 @@ Event Stream 解析器测试脚本
 import asyncio
 import struct
 import json
+import pytest
 
 
+@pytest.mark.asyncio
 async def test_event_stream_parser():
     """测试 Event Stream 解析器"""
     print("=" * 60)

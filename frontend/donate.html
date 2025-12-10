@@ -348,11 +348,37 @@
     </div>
 
     <script>
+        // 全局变量存储 OAuth 配置
+        let oauthConfig = null;
+
+        // 获取 OAuth 配置
+        async function getOAuthConfig() {
+            if (oauthConfig) return oauthConfig;
+            try {
+                const response = await fetch('/api/gemini/oauth-config');
+                if (!response.ok) {
+                    throw new Error('获取 OAuth 配置失败');
+                }
+                oauthConfig = await response.json();
+                return oauthConfig;
+            } catch (error) {
+                console.error('获取 OAuth 配置失败:', error);
+                return null;
+            }
+        }
+
         // 启动投喂流程（使用弹出窗口）
-        function startDonation() {
+        async function startDonation() {
+            // 获取 OAuth 配置
+            const config = await getOAuthConfig();
+            if (!config || !config.clientId) {
+                alert('投喂功能暂不可用，服务器未配置 OAuth 凭证');
+                return;
+            }
+
             // 构建 OAuth URL
-            const clientId = '1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com';
-            const redirectUri = 'http://localhost:64312/oauth-callback';
+            const clientId = config.clientId;
+            const redirectUri = config.redirectUri || 'http://localhost:64312/oauth-callback';
             const scopes = [
                 'https://www.googleapis.com/auth/cloud-platform',
                 'https://www.googleapis.com/auth/userinfo.email',

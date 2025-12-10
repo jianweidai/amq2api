@@ -53,6 +53,9 @@ test_*.py
 get_key_token.py
 import_accounts.py
 WARP.md
+
+# Hypothesis 测试缓存（包含本地路径信息）
+.hypothesis/
 # OAuth 临时文件
 gemini_credentials.json
 

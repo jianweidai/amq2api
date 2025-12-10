@@ -100,8 +100,8 @@ def test_user_interruption_scenario():
     if 'toolResults' in history[2]['userInputMessage']['userInputMessageContext']:
         tool_results = history[2]['userInputMessage']['userInputMessageContext']['toolResults']
         print(f"      Tool results: {len(tool_results)}")
-        for result in tool_results:
-            print(f"         - {result['toolUseId']}: {result['status']}")
+        for tr in tool_results:
+            print(f"         - {tr['toolUseId']}: {tr['status']}")
 
     # 检查当前消息
     print("\n2. 验证当前消息:")
