@@ -208,14 +208,16 @@ def convert_claude_to_codewhisperer_request(
         toolResults=tool_results  # 包含从消息中提取的 tool_results
     )
 
-    # 检测是否启用 thinking 模式
-    thinking_enabled = False
+    # 检测是否启用 thinking 模式（默认启用，与 Gemini 行为一致）
+    thinking_enabled = True  # 默认启用
     thinking_param = getattr(claude_req, 'thinking', None)
-    if thinking_param:
+    if thinking_param is not None:
         if isinstance(thinking_param, bool):
             thinking_enabled = thinking_param
         elif isinstance(thinking_param, dict):
-            thinking_enabled = thinking_param.get('type') == 'enabled' or thinking_param.get('enabled', False)
+            # 检查是否明确禁用
+            thinking_type = thinking_param.get('type', 'enabled')
+            thinking_enabled = thinking_type == 'enabled' or thinking_param.get('enabled', True)
 
     # 如果启用 thinking，在 prompt_content 末尾添加 THINKING_HINT
     if thinking_enabled and prompt_content:

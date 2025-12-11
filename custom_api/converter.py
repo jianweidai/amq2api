@@ -714,7 +714,7 @@ def convert_claude_to_openai_request(claude_req: ClaudeRequest, model: str) -> T
 
 def _is_thinking_enabled(claude_req: ClaudeRequest) -> bool:
     """
-    检测请求是否启用了 thinking 模式
+    检测请求是否启用了 thinking 模式（默认启用，与 Gemini 行为一致）
     
     Args:
         claude_req: Claude 请求对象
@@ -723,12 +723,14 @@ def _is_thinking_enabled(claude_req: ClaudeRequest) -> bool:
         bool: 是否启用 thinking
     """
     thinking_param = getattr(claude_req, 'thinking', None)
-    if thinking_param:
+    if thinking_param is not None:
         if isinstance(thinking_param, bool):
             return thinking_param
         elif isinstance(thinking_param, dict):
-            return thinking_param.get('type') == 'enabled' or thinking_param.get('enabled', False)
-    return False
+            # 检查是否明确禁用
+            thinking_type = thinking_param.get('type', 'enabled')
+            return thinking_type == 'enabled' or thinking_param.get('enabled', True)
+    return True  # 默认启用
 
 
 
