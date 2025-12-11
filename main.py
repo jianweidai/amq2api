@@ -72,10 +72,35 @@ async def lifespan(app: FastAPI):
         logger.error(f"配置初始化失败: {e}")
         raise
 
+    # 启动定时刷新任务
+    refresh_task = None
+    try:
+        from token_scheduler import scheduled_token_refresh
+        import asyncio
+        
+        config = await read_global_config()
+        if config.enable_auto_refresh:
+            refresh_task = asyncio.create_task(scheduled_token_refresh())
+            logger.info("Token 定时刷新后台任务已创建")
+        else:
+            logger.info("Token 定时刷新功能已禁用")
+    except Exception as e:
+        logger.error(f"启动定时刷新任务失败: {e}")
+
     yield
 
     # 关闭时清理资源
     logger.info("正在关闭服务...")
+    
+    # 取消定时刷新任务
+    if refresh_task is not None:
+        logger.info("正在停止定时刷新任务...")
+        refresh_task.cancel()
+        try:
+            await refresh_task
+        except asyncio.CancelledError:
+            logger.info("定时刷新任务已停止")
+
 
 
 # 创建 FastAPI 应用
