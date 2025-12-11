@@ -50,6 +50,10 @@ class GlobalConfig:
     cache_ttl_seconds: int = 300  # 默认 5 分钟
     max_cache_entries: int = 1000  # 默认最大 1000 条缓存
 
+    # Token 定时刷新配置
+    enable_auto_refresh: bool = True  # 是否启用定时刷新
+    token_refresh_interval_hours: int = 5  # 刷新间隔（小时）
+
     # 动态更新的 token 信息
     access_token: Optional[str] = None
     token_expires_at: Optional[datetime] = None
@@ -129,7 +133,10 @@ async def read_global_config() -> GlobalConfig:
                 # Prompt Caching 模拟配置
                 enable_cache_simulation=os.getenv("ENABLE_CACHE_SIMULATION", "false").lower() == "true",
                 cache_ttl_seconds=int(os.getenv("CACHE_TTL_SECONDS", "300")),
-                max_cache_entries=int(os.getenv("MAX_CACHE_ENTRIES", "1000"))
+                max_cache_entries=int(os.getenv("MAX_CACHE_ENTRIES", "1000")),
+                # Token 定时刷新配置
+                enable_auto_refresh=os.getenv("ENABLE_AUTO_REFRESH", "true").lower() == "true",
+                token_refresh_interval_hours=int(os.getenv("TOKEN_REFRESH_INTERVAL_HOURS", "5"))
             )
 
             # 验证必需的配置项
