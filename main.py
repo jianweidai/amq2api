@@ -12,6 +12,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 import httpx
+import time
+import uuid
 from typing import Optional
 from fastapi import FastAPI, Request, HTTPException, Header, Depends
 from fastapi.responses import StreamingResponse
@@ -1372,6 +1374,165 @@ async def test_custom_api_account(account_id: str, _: bool = Depends(verify_admi
     except Exception as e:
         logger.error(f"测试 Custom API 账号失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"测试失败: {str(e)}")
+
+
+# ============== URL 登录（设备授权）API ==============
+# 内存中的授权会话存储
+AUTH_SESSIONS: Dict[str, Dict[str, Any]] = {}
+
+
+class AuthStartBody(BaseModel):
+    """启动登录请求体"""
+    label: Optional[str] = None
+    enabled: Optional[bool] = True
+
+
+@app.post("/v2/auth/start")
+async def auth_start(body: AuthStartBody, _: bool = Depends(verify_admin_key)):
+    """
+    启动设备授权流程，返回验证链接
+    
+    用户需要在浏览器中打开返回的 verificationUriComplete 链接完成 AWS 登录
+    """
+    from auth import register_oidc_client, start_device_authorization
+    
+    try:
+        # 1. 注册 OIDC 客户端
+        client_id, client_secret = await register_oidc_client()
+        
+        # 2. 获取设备授权信息
+        dev = await start_device_authorization(client_id, client_secret)
+        
+        # 3. 创建会话并存储
+        auth_id = str(uuid.uuid4())
+        sess = {
+            "clientId": client_id,
+            "clientSecret": client_secret,
+            "deviceCode": dev.get("deviceCode"),
+            "interval": int(dev.get("interval", 1)),
+            "expiresIn": int(dev.get("expiresIn", 600)),
+            "verificationUriComplete": dev.get("verificationUriComplete"),
+            "userCode": dev.get("userCode"),
+            "startTime": int(time.time()),
+            "label": body.label,
+            "enabled": True if body.enabled is None else bool(body.enabled),
+            "status": "pending",
+            "error": None,
+            "accountId": None,
+        }
+        AUTH_SESSIONS[auth_id] = sess
+        
+        logger.info(f"设备授权已启动: authId={auth_id}, userCode={sess['userCode']}")
+        
+        # 4. 返回验证信息
+        return JSONResponse(content={
+            "authId": auth_id,
+            "verificationUriComplete": sess["verificationUriComplete"],
+            "userCode": sess["userCode"],
+            "expiresIn": sess["expiresIn"],
+            "interval": sess["interval"],
+        })
+        
+    except Exception as e:
+        logger.error(f"启动设备授权失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"启动登录失败: {str(e)}")
+
+
+@app.get("/v2/auth/status/{auth_id}")
+async def auth_status(auth_id: str, _: bool = Depends(verify_admin_key)):
+    """查询授权状态"""
+    sess = AUTH_SESSIONS.get(auth_id)
+    if not sess:
+        raise HTTPException(status_code=404, detail="授权会话不存在")
+    
+    now_ts = int(time.time())
+    deadline = sess["startTime"] + min(int(sess.get("expiresIn", 600)), 300)
+    remaining = max(0, deadline - now_ts)
+    
+    return JSONResponse(content={
+        "status": sess.get("status"),
+        "remaining": remaining,
+        "error": sess.get("error"),
+        "accountId": sess.get("accountId"),
+    })
+
+
+@app.post("/v2/auth/claim/{auth_id}")
+async def auth_claim(auth_id: str, _: bool = Depends(verify_admin_key)):
+    """
+    阻塞等待用户授权，成功后创建账号
+    
+    此端点会轮询 AWS OIDC 服务，直到用户完成授权或超时（最多 5 分钟）
+    """
+    from auth import poll_device_token
+    
+    sess = AUTH_SESSIONS.get(auth_id)
+    if not sess:
+        raise HTTPException(status_code=404, detail="授权会话不存在")
+    
+    # 如果已完成，直接返回
+    if sess.get("status") in ("completed", "timeout", "error"):
+        return JSONResponse(content={
+            "status": sess["status"],
+            "accountId": sess.get("accountId"),
+            "error": sess.get("error"),
+        })
+    
+    try:
+        # 1. 轮询获取 token（最多等待 5 分钟）
+        toks = await poll_device_token(
+            sess["clientId"],
+            sess["clientSecret"],
+            sess["deviceCode"],
+            sess["interval"],
+            sess["expiresIn"],
+            max_timeout_sec=300,
+        )
+        
+        access_token = toks.get("accessToken")
+        refresh_token = toks.get("refreshToken")
+        
+        if not access_token:
+            raise HTTPException(status_code=502, detail="未获取到 accessToken")
+        
+        # 2. 创建账号
+        acc = create_account(
+            label=sess.get("label"),
+            client_id=sess["clientId"],
+            client_secret=sess["clientSecret"],
+            refresh_token=refresh_token,
+            access_token=access_token,
+            other=None,
+            enabled=sess.get("enabled", True),
+            account_type="amazonq"
+        )
+        
+        # 3. 更新会话状态
+        sess["status"] = "completed"
+        sess["accountId"] = acc["id"]
+        
+        logger.info(f"设备授权成功，已创建账号: {acc['id']}")
+        
+        return JSONResponse(content={
+            "status": "completed",
+            "account": acc,
+        })
+        
+    except TimeoutError:
+        sess["status"] = "timeout"
+        sess["error"] = "授权超时（5分钟）"
+        logger.warning(f"设备授权超时: authId={auth_id}")
+        raise HTTPException(status_code=408, detail="授权超时（5分钟），请重新开始登录")
+    except httpx.HTTPError as e:
+        sess["status"] = "error"
+        sess["error"] = str(e)
+        logger.error(f"设备授权失败: {e}")
+        raise HTTPException(status_code=502, detail=f"OIDC 错误: {str(e)}")
+    except Exception as e:
+        sess["status"] = "error"
+        sess["error"] = str(e)
+        logger.error(f"设备授权失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"创建账号失败: {str(e)}")
 
 
 # 管理页面

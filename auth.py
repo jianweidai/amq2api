@@ -1,14 +1,174 @@
 """
 认证模块
 负责 Token 刷新和管理（支持多账号）
+支持 AWS OIDC 设备授权流程（Device Authorization Grant）
 """
 import httpx
 import logging
 import uuid
+import time
+import asyncio
 from typing import Dict, Any, Tuple, Optional
 from account_manager import get_random_account, update_account_tokens, update_refresh_status
 
 logger = logging.getLogger(__name__)
+
+# ============== OIDC 设备授权常量 ==============
+OIDC_BASE = "https://oidc.us-east-1.amazonaws.com"
+REGISTER_URL = f"{OIDC_BASE}/client/register"
+DEVICE_AUTH_URL = f"{OIDC_BASE}/device_authorization"
+TOKEN_URL = f"{OIDC_BASE}/token"
+START_URL = "https://view.awsapps.com/start"
+
+# HTTP 请求头（模拟 AWS CLI）
+USER_AGENT = "aws-sdk-rust/1.3.9 os/windows lang/rust/1.87.0"
+X_AMZ_USER_AGENT = "aws-sdk-rust/1.3.9 ua/2.1 api/ssooidc/1.88.0 os/windows lang/rust/1.87.0 m/E app/AmazonQ-For-CLI"
+AMZ_SDK_REQUEST = "attempt=1; max=3"
+
+
+def _make_oidc_headers() -> Dict[str, str]:
+    """构造 OIDC 请求头"""
+    return {
+        "content-type": "application/json",
+        "user-agent": USER_AGENT,
+        "x-amz-user-agent": X_AMZ_USER_AGENT,
+        "amz-sdk-request": AMZ_SDK_REQUEST,
+        "amz-sdk-invocation-id": str(uuid.uuid4()),
+    }
+
+
+async def register_oidc_client() -> Tuple[str, str]:
+    """
+    注册 OIDC 客户端，返回 (clientId, clientSecret)
+    
+    Returns:
+        Tuple[str, str]: (clientId, clientSecret)
+    
+    Raises:
+        httpx.HTTPError: HTTP 请求失败
+    """
+    payload = {
+        "clientName": "Amazon Q Developer for command line",
+        "clientType": "public",
+        "scopes": [
+            "codewhisperer:completions",
+            "codewhisperer:analysis",
+            "codewhisperer:conversations",
+        ],
+    }
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            REGISTER_URL,
+            json=payload,
+            headers=_make_oidc_headers()
+        )
+        response.raise_for_status()
+        data = response.json()
+        logger.info("OIDC 客户端注册成功")
+        return data["clientId"], data["clientSecret"]
+
+
+async def start_device_authorization(client_id: str, client_secret: str) -> Dict[str, Any]:
+    """
+    启动设备授权流程
+    
+    Args:
+        client_id: OIDC 客户端 ID
+        client_secret: OIDC 客户端密钥
+    
+    Returns:
+        Dict 包含:
+        - deviceCode: 设备码（用于后续轮询）
+        - interval: 轮询间隔（秒）
+        - expiresIn: 过期时间（秒）
+        - verificationUriComplete: 完整验证链接（用户需要访问）
+        - userCode: 用户码（显示给用户）
+    
+    Raises:
+        httpx.HTTPError: HTTP 请求失败
+    """
+    payload = {
+        "clientId": client_id,
+        "clientSecret": client_secret,
+        "startUrl": START_URL,
+    }
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            DEVICE_AUTH_URL,
+            json=payload,
+            headers=_make_oidc_headers()
+        )
+        response.raise_for_status()
+        data = response.json()
+        logger.info(f"设备授权已启动，用户码: {data.get('userCode')}")
+        return data
+
+
+async def poll_device_token(
+    client_id: str,
+    client_secret: str,
+    device_code: str,
+    interval: int,
+    expires_in: int,
+    max_timeout_sec: int = 300,
+) -> Dict[str, Any]:
+    """
+    轮询 token 端点，直到用户完成授权或超时
+    
+    Args:
+        client_id: OIDC 客户端 ID
+        client_secret: OIDC 客户端密钥
+        device_code: 设备码
+        interval: 轮询间隔（秒）
+        expires_in: 过期时间（秒）
+        max_timeout_sec: 最大等待时间（秒），默认 5 分钟
+    
+    Returns:
+        Dict 包含:
+        - accessToken: 访问令牌
+        - refreshToken: 刷新令牌（可选）
+    
+    Raises:
+        TimeoutError: 超时未授权
+        httpx.HTTPError: HTTP 错误
+    """
+    payload = {
+        "clientId": client_id,
+        "clientSecret": client_secret,
+        "deviceCode": device_code,
+        "grantType": "urn:ietf:params:oauth:grant-type:device_code",
+    }
+
+    deadline = min(time.time() + expires_in, time.time() + max_timeout_sec)
+    poll_interval = max(1, int(interval or 1))
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        while time.time() < deadline:
+            response = await client.post(
+                TOKEN_URL,
+                json=payload,
+                headers=_make_oidc_headers()
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                logger.info("设备授权成功，已获取 token")
+                return data
+            
+            if response.status_code == 400:
+                err = response.json()
+                if err.get("error") == "authorization_pending":
+                    # 用户尚未完成授权，继续等待
+                    await asyncio.sleep(poll_interval)
+                    continue
+                # 其他错误
+                response.raise_for_status()
+            
+            response.raise_for_status()
+
+    raise TimeoutError("设备授权超时，用户未在规定时间内完成授权")
 
 
 class TokenRefreshError(Exception):
