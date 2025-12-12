@@ -4,6 +4,7 @@ Custom API 请求处理器
 """
 import json
 import logging
+import asyncio
 import httpx
 from typing import Dict, Any, Optional, AsyncIterator
 
@@ -18,6 +19,11 @@ logger = logging.getLogger(__name__)
 
 # 默认超时时间（秒）
 DEFAULT_TIMEOUT = 300.0
+
+# 429 重试配置
+MAX_RETRIES = 3  # 最大重试次数
+BASE_RETRY_DELAY = 5.0  # 基础重试延迟（秒）
+MAX_RETRY_DELAY = 60.0  # 最大重试延迟（秒）
 
 
 async def handle_custom_api_request(
@@ -143,72 +149,118 @@ async def handle_openai_format_stream(
     input_tokens = _estimate_input_tokens(openai_request)
     
     async def openai_byte_stream() -> AsyncIterator[bytes]:
-        """发送请求并返回字节流"""
-        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-            try:
-                async with client.stream(
-                    "POST",
-                    api_url,
-                    json=openai_request,
-                    headers=headers
-                ) as response:
-                    # 检查响应状态
-                    if response.status_code != 200:
-                        error_text = await response.aread()
-                        error_str = error_text.decode() if isinstance(error_text, bytes) else str(error_text)
-                        logger.error(f"OpenAI API 错误: {response.status_code} {error_str}")
-                        
-                        # 转换错误为 Claude 格式
-                        try:
-                            error_json = json.loads(error_str)
-                        except json.JSONDecodeError:
-                            error_json = {"error": {"message": error_str, "type": "api_error"}}
-                        
-                        claude_error = convert_openai_error_to_claude(error_json, response.status_code)
-                        error_event = f"event: error\ndata: {json.dumps(claude_error)}\n\n"
-                        yield error_event.encode('utf-8')
-                        return
-                    
-                    # 正常响应，返回字节流
-                    async for chunk in response.aiter_bytes():
-                        if chunk:
-                            yield chunk
+        """发送请求并返回字节流，支持 429 错误自动重试"""
+        retry_count = 0
+        last_error = None
+        
+        while retry_count <= MAX_RETRIES:
+            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+                try:
+                    async with client.stream(
+                        "POST",
+                        api_url,
+                        json=openai_request,
+                        headers=headers
+                    ) as response:
+                        # 检查响应状态
+                        if response.status_code == 429:
+                            # 429 速率限制错误 - 尝试重试
+                            error_text = await response.aread()
+                            error_str = error_text.decode() if isinstance(error_text, bytes) else str(error_text)
                             
-            except httpx.TimeoutException as e:
-                logger.error(f"Custom API 超时: {e}")
-                error_response = {
-                    "type": "error",
-                    "error": {
-                        "type": "api_error",
-                        "message": f"上游 API 超时: {str(e)}"
+                            if retry_count < MAX_RETRIES:
+                                # 计算重试延迟（指数退避）
+                                retry_after = response.headers.get('Retry-After')
+                                if retry_after:
+                                    try:
+                                        delay = min(float(retry_after), MAX_RETRY_DELAY)
+                                    except ValueError:
+                                        delay = min(BASE_RETRY_DELAY * (2 ** retry_count), MAX_RETRY_DELAY)
+                                else:
+                                    delay = min(BASE_RETRY_DELAY * (2 ** retry_count), MAX_RETRY_DELAY)
+                                
+                                retry_count += 1
+                                logger.warning(
+                                    f"Custom API 429 速率限制，{delay:.1f}秒后重试 "
+                                    f"(第 {retry_count}/{MAX_RETRIES} 次): {error_str[:200]}"
+                                )
+                                await asyncio.sleep(delay)
+                                continue  # 重试
+                            else:
+                                # 重试次数用尽
+                                logger.error(f"Custom API 429 重试次数用尽: {error_str}")
+                                try:
+                                    error_json = json.loads(error_str)
+                                except json.JSONDecodeError:
+                                    error_json = {"error": {"message": error_str, "type": "rate_limit_error"}}
+                                
+                                claude_error = convert_openai_error_to_claude(error_json, 429)
+                                error_event = f"event: error\ndata: {json.dumps(claude_error)}\n\n"
+                                yield error_event.encode('utf-8')
+                                return
+                        
+                        elif response.status_code != 200:
+                            # 其他错误，不重试
+                            error_text = await response.aread()
+                            error_str = error_text.decode() if isinstance(error_text, bytes) else str(error_text)
+                            logger.error(f"OpenAI API 错误: {response.status_code} {error_str}")
+                            
+                            try:
+                                error_json = json.loads(error_str)
+                            except json.JSONDecodeError:
+                                error_json = {"error": {"message": error_str, "type": "api_error"}}
+                            
+                            claude_error = convert_openai_error_to_claude(error_json, response.status_code)
+                            error_event = f"event: error\ndata: {json.dumps(claude_error)}\n\n"
+                            yield error_event.encode('utf-8')
+                            return
+                        
+                        # 正常响应，返回字节流
+                        if retry_count > 0:
+                            logger.info(f"Custom API 429 重试成功 (第 {retry_count} 次)")
+                        async for chunk in response.aiter_bytes():
+                            if chunk:
+                                yield chunk
+                        return  # 成功完成，退出重试循环
+                                
+                except httpx.TimeoutException as e:
+                    logger.error(f"Custom API 超时: {e}")
+                    error_response = {
+                        "type": "error",
+                        "error": {
+                            "type": "api_error",
+                            "message": f"上游 API 超时: {str(e)}"
+                        }
                     }
-                }
-                error_event = f"event: error\ndata: {json.dumps(error_response)}\n\n"
-                yield error_event.encode('utf-8')
-                
-            except httpx.ConnectError as e:
-                logger.error(f"Custom API 连接失败: {e}")
-                error_response = {
-                    "type": "error",
-                    "error": {
-                        "type": "api_error",
-                        "message": f"无法连接到上游 API: {str(e)}"
+                    error_event = f"event: error\ndata: {json.dumps(error_response)}\n\n"
+                    yield error_event.encode('utf-8')
+                    return
+                    
+                except httpx.ConnectError as e:
+                    logger.error(f"Custom API 连接失败: {e}")
+                    error_response = {
+                        "type": "error",
+                        "error": {
+                            "type": "api_error",
+                            "message": f"无法连接到上游 API: {str(e)}"
+                        }
                     }
-                }
-                error_event = f"event: error\ndata: {json.dumps(error_response)}\n\n"
-                yield error_event.encode('utf-8')
-                
-            except httpx.RequestError as e:
-                logger.error(f"Custom API 请求错误: {e}")
-                error_response = {
-                    "type": "error",
-                    "error": {
-                        "type": "api_error",
-                        "message": f"上游 API 请求错误: {str(e)}"
+                    error_event = f"event: error\ndata: {json.dumps(error_response)}\n\n"
+                    yield error_event.encode('utf-8')
+                    return
+                    
+                except httpx.RequestError as e:
+                    logger.error(f"Custom API 请求错误: {e}")
+                    error_response = {
+                        "type": "error",
+                        "error": {
+                            "type": "api_error",
+                            "message": f"上游 API 请求错误: {str(e)}"
+                        }
                     }
-                }
-                error_event = f"event: error\ndata: {json.dumps(error_response)}\n\n"
-                yield error_event.encode('utf-8')
+                    error_event = f"event: error\ndata: {json.dumps(error_response)}\n\n"
+                    yield error_event.encode('utf-8')
+                    return
     
     # 转换 OpenAI 流为 Claude 流，并跟踪 token 使用量
     output_tokens = 0
