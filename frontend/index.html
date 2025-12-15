@@ -625,6 +625,8 @@
               <label>Model</label>
               <input id="new_model" placeholder="gpt-4o" />
             </div>
+          </div>
+          <div class="row">
             <div class="field" style="max-width:150px">
               <label>API Format</label>
               <select id="new_format">
@@ -632,14 +634,28 @@
                 <option value="claude">Claude</option>
               </select>
             </div>
+            <div class="field" style="max-width:200px">
+              <label>Provider（提供商）</label>
+              <select id="new_provider">
+                <option value="">默认（官方 API）</option>
+                <option value="azure">Azure（Azure Foundry）</option>
+                <option value="anthropic">Anthropic（官方）</option>
+                <option value="openai">OpenAI</option>
+                <option value="other">其他</option>
+              </select>
+            </div>
           </div>
         </div>
-        <div class="row" style="margin-top:12px">
+        <div class="row" style="margin-top:12px;align-items:center">
           <label class="switch">
             <input id="new_enabled" type="checkbox" checked />
             <span class="slider"></span>
           </label>
           <label style="color: var(--text)">启用账号</label>
+          <div class="field" style="max-width:120px;margin-left:16px">
+            <label>权重</label>
+            <input id="new_weight" type="number" min="1" max="100" value="50" placeholder="50" />
+          </div>
           <button onclick="createAccount()">创建账号</button>
         </div>
 
@@ -894,6 +910,7 @@
           row('状态', '⚠️ 已被封禁');
           row('封禁时间', other.suspended_at || 'N/A');
         }
+        row('权重', `${acc.weight || 50}（越大优先级越高，建议1-100）`);
         row('创建时间', acc.created_at || 'N/A');
         if (acc.type === 'custom_api') {
           row('API Base', other.api_base || 'N/A');
@@ -1073,6 +1090,7 @@
         const api_base = document.getElementById('new_api_base').value.trim();
         const model = document.getElementById('new_model').value.trim();
         const format = document.getElementById('new_format').value;
+        const provider = document.getElementById('new_provider').value;
         if (!api_base) {
           alert('请输入 API Base URL');
           return;
@@ -1084,8 +1102,10 @@
         other.api_base = api_base;
         other.model = model;
         other.format = format;
+        if (provider) other.provider = provider;
       }
 
+      const weightVal = parseInt(document.getElementById('new_weight').value) || 50;
       const body = {
         type,
         label: document.getElementById('new_label').value.trim() || null,
@@ -1094,7 +1114,8 @@
         refreshToken: type === 'custom_api' ? null : (document.getElementById('new_refreshToken').value.trim() || null),
         accessToken: type === 'custom_api' ? null : (document.getElementById('new_accessToken').value.trim() || null),
         other: Object.keys(other).length > 0 ? other : null,
-        enabled: document.getElementById('new_enabled').checked
+        enabled: document.getElementById('new_enabled').checked,
+        weight: Math.max(1, weightVal)
       };
 
       try {
@@ -1116,6 +1137,7 @@
         document.getElementById('new_api_base').value = '';
         document.getElementById('new_model').value = '';
         document.getElementById('new_format').value = 'openai';
+        document.getElementById('new_weight').value = '50';
       } catch (e) {
         alert('创建失败：' + e);
       }
@@ -1162,6 +1184,7 @@
       html += '<h3 style="margin-top:0">编辑账号</h3>';
       html += '<div style="display:flex;flex-direction:column;gap:12px">';
       html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">标签</label><input id="edit_label" value="${acc.label || ''}" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></div>`;
+      html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">权重（越大优先级越高，建议1-100）</label><input id="edit_weight" type="number" min="1" max="100" value="${acc.weight || 50}" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></div>`;
 
       if (acc.type === 'custom_api') {
         // Custom API specific fields
@@ -1169,6 +1192,7 @@
         html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">API Base URL</label><input id="edit_api_base" value="${other.api_base || ''}" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></div>`;
         html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">Model</label><input id="edit_model" value="${other.model || ''}" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></div>`;
         html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">API Format</label><select id="edit_format" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"><option value="openai" ${other.format !== 'claude' ? 'selected' : ''}>OpenAI</option><option value="claude" ${other.format === 'claude' ? 'selected' : ''}>Claude</option></select></div>`;
+        html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">Provider（提供商）</label><select id="edit_provider" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"><option value="" ${!other.provider ? 'selected' : ''}>默认（官方 API）</option><option value="azure" ${other.provider === 'azure' ? 'selected' : ''}>Azure（Azure Foundry）</option><option value="anthropic" ${other.provider === 'anthropic' ? 'selected' : ''}>Anthropic（官方）</option><option value="openai" ${other.provider === 'openai' ? 'selected' : ''}>OpenAI</option><option value="other" ${other.provider === 'other' ? 'selected' : ''}>其他</option></select></div>`;
       } else {
         // Standard OAuth fields
         html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">Client ID</label><input id="edit_clientId" value="${acc.clientId}" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></div>`;
@@ -1189,9 +1213,11 @@
 
       document.getElementById('save_edit').onclick = async () => {
         try {
+          const weightVal = parseInt(document.getElementById('edit_weight').value) || 50;
           const patch = {
             label: document.getElementById('edit_label').value.trim() || null,
-            clientSecret: document.getElementById('edit_clientSecret').value.trim()
+            clientSecret: document.getElementById('edit_clientSecret').value.trim(),
+            weight: Math.max(1, weightVal)
           };
 
           if (acc.type === 'custom_api') {
@@ -1212,6 +1238,7 @@
             newOther.api_base = api_base;
             newOther.model = model;
             newOther.format = format;
+            newOther.provider = document.getElementById('edit_provider').value;
             patch.other = newOther;
           } else {
             patch.clientId = document.getElementById('edit_clientId').value.trim();

@@ -61,19 +61,21 @@ async def handle_custom_api_request(
     api_format = other.get("format", "openai")
     api_base = other.get("api_base", "")
     model = other.get("model", "gpt-4o")
+    provider = other.get("provider", "")  # 新增：API 提供商（azure, anthropic, openai 等）
     api_key = account.get("clientSecret", "")
     account_id = account.get("id")
     
-    logger.info(f"Custom API 请求: format={api_format}, api_base={api_base}, model={model}")
+    logger.info(f"Custom API 请求: format={api_format}, provider={provider}, api_base={api_base}, model={model}")
     
     if api_format == "claude":
-        # Claude 格式：透传
+        # Claude 格式：根据 provider 决定是否清理请求
         async for event in handle_claude_format_stream(
             api_base=api_base,
             api_key=api_key,
             request_data=request_data,
             account_id=account_id,
             model=claude_req.model,
+            provider=provider,  # 传递 provider
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens
         ):
@@ -187,14 +189,20 @@ async def handle_openai_format_stream(
                                 await asyncio.sleep(delay)
                                 continue  # 重试
                             else:
-                                # 重试次数用尽
+                                # 重试次数用尽，设置 5 分钟冷却
                                 logger.error(f"Custom API 429 重试次数用尽: {error_str}")
+                                if account_id:
+                                    from account_manager import set_account_cooldown
+                                    set_account_cooldown(account_id, 300)  # 5 分钟冷却
+                                    logger.warning(f"Custom API 账号 {account_id} 进入 5 分钟冷却期")
+                                
                                 try:
                                     error_json = json.loads(error_str)
                                 except json.JSONDecodeError:
                                     error_json = {"error": {"message": error_str, "type": "rate_limit_error"}}
                                 
                                 claude_error = convert_openai_error_to_claude(error_json, 429)
+                                claude_error["error"]["message"] = "速率限制：账号已进入 5 分钟冷却期，请稍后重试。" + claude_error["error"].get("message", "")
                                 error_event = f"event: error\ndata: {json.dumps(claude_error)}\n\n"
                                 yield error_event.encode('utf-8')
                                 return
@@ -313,14 +321,16 @@ async def handle_claude_format_stream(
     request_data: Dict[str, Any],
     account_id: Optional[str] = None,
     model: str = "claude-sonnet-4.5",
+    provider: str = "",
     cache_creation_input_tokens: int = 0,
     cache_read_input_tokens: int = 0
 ) -> AsyncIterator[str]:
     """
     处理 Claude 格式的自定义 API 流式响应（透传模式）
     
-    直接将请求转发到目标 API，不进行格式转换。
-    响应也直接透传回客户端。
+    根据 provider 决定是否清理请求：
+    - provider="azure": 应用 Azure 特殊清理逻辑（移除不支持的字段、转换工具格式等）
+    - provider="anthropic" 或空: 直接透传，不清理
     
     Args:
         api_base: API 基础 URL (如 https://api.anthropic.com)
@@ -328,12 +338,19 @@ async def handle_claude_format_stream(
         request_data: 原始 Claude 请求数据
         account_id: 账号 ID（用于 token 统计）
         model: 模型名称
+        provider: API 提供商（azure, anthropic 等）
         cache_creation_input_tokens: 缓存创建 token 数
         cache_read_input_tokens: 缓存读取 token 数
     
     Yields:
         str: Claude 格式的 SSE 事件（直接透传）
     """
+    # 根据 provider 决定是否清理请求
+    if provider == "azure":
+        # Azure 需要特殊处理：移除不支持的字段、转换工具格式等
+        request_data = _clean_claude_request_for_azure(request_data)
+    # 官方 Anthropic API 或其他：直接透传，不清理
+    
     # 用于跟踪 token 使用量
     input_tokens = 0
     output_tokens = 0
@@ -358,7 +375,29 @@ async def handle_claude_format_stream(
                 headers=headers
             ) as response:
                 # 检查响应状态
-                if response.status_code != 200:
+                if response.status_code == 429:
+                    # 429 速率限制，设置 5 分钟冷却
+                    error_text = await response.aread()
+                    error_str = error_text.decode() if isinstance(error_text, bytes) else str(error_text)
+                    logger.error(f"Claude API 429 速率限制: {error_str}")
+                    
+                    if account_id:
+                        from account_manager import set_account_cooldown
+                        set_account_cooldown(account_id, 300)  # 5 分钟冷却
+                        logger.warning(f"Custom API (Claude格式) 账号 {account_id} 进入 5 分钟冷却期")
+                    
+                    error_response = {
+                        "type": "error",
+                        "error": {
+                            "type": "rate_limit_error",
+                            "message": "速率限制：账号已进入 5 分钟冷却期，请稍后重试"
+                        }
+                    }
+                    error_event = f"event: error\ndata: {json.dumps(error_response)}\n\n"
+                    yield error_event
+                    return
+                
+                elif response.status_code != 200:
                     error_text = await response.aread()
                     error_str = error_text.decode() if isinstance(error_text, bytes) else str(error_text)
                     logger.error(f"Claude API 错误: {response.status_code} {error_str}")
@@ -466,6 +505,166 @@ async def handle_claude_format_stream(
                 }
             }
             yield f"event: error\ndata: {json.dumps(error_response)}\n\n"
+
+
+def _clean_claude_request_for_azure(request_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    为 Azure Anthropic API 清理 Claude 请求数据
+    
+    Azure 的 Anthropic API 有一些限制：
+    1. 不支持某些扩展字段（context_management, betas 等）
+    2. 工具格式需要转换为标准格式（不支持 custom 类型包装）
+    3. 所有消息必须有非空 content（除了最后一条 assistant 消息）
+    
+    Args:
+        request_data: 原始请求数据
+    
+    Returns:
+        清理后的请求数据
+    """
+    # 深拷贝以避免修改原始数据
+    import copy
+    cleaned = copy.deepcopy(request_data)
+    
+    # 移除不支持的顶层字段
+    unsupported_fields = [
+        "context_management",  # Azure 不支持
+        "betas",  # beta 功能
+        "anthropic_beta",  # beta 功能
+    ]
+    for field in unsupported_fields:
+        if field in cleaned:
+            logger.debug(f"移除不支持的字段: {field}")
+            del cleaned[field]
+    
+    # 清理 messages 字段：确保所有消息都有非空 content
+    if "messages" in cleaned and isinstance(cleaned["messages"], list):
+        cleaned_messages = []
+        for idx, msg in enumerate(cleaned["messages"]):
+            if isinstance(msg, dict):
+                content = msg.get("content")
+                role = msg.get("role", "")
+                
+                # 检查 content 是否为空
+                is_empty = False
+                if content is None:
+                    is_empty = True
+                elif isinstance(content, str) and not content.strip():
+                    is_empty = True
+                elif isinstance(content, list) and len(content) == 0:
+                    is_empty = True
+                
+                if is_empty:
+                    # 最后一条 assistant 消息可以为空
+                    is_last = (idx == len(cleaned["messages"]) - 1)
+                    if role == "assistant" and is_last:
+                        cleaned_messages.append(msg)
+                    else:
+                        logger.debug(f"跳过空内容消息 {idx}: role={role}")
+                else:
+                    cleaned_messages.append(msg)
+            else:
+                cleaned_messages.append(msg)
+        
+        cleaned["messages"] = cleaned_messages
+    
+    # 清理 tools 字段
+    if "tools" in cleaned and isinstance(cleaned["tools"], list):
+        cleaned_tools = []
+        for idx, tool in enumerate(cleaned["tools"]):
+            if isinstance(tool, dict):
+                tool_type = tool.get("type")
+                
+                # 记录原始工具信息用于调试
+                logger.debug(f"处理工具 {idx}: type={tool_type}, keys={list(tool.keys())}")
+                
+                # Claude 内置工具类型（保持原样）
+                builtin_types = [
+                    "bash_20250124", "bash_20241022",
+                    "text_editor_20250124", "text_editor_20250429", "text_editor_20250728", "text_editor_20241022",
+                    "web_search_20250305",
+                    "computer_20241022"
+                ]
+                
+                if tool_type in builtin_types:
+                    # 内置工具类型，只保留 type 和 name
+                    cleaned_tool = {"type": tool_type}
+                    if "name" in tool:
+                        cleaned_tool["name"] = tool["name"]
+                    cleaned_tools.append(cleaned_tool)
+                    
+                elif tool_type == "custom":
+                    # custom 类型工具，提取为标准格式
+                    custom_data = tool.get("custom", {})
+                    cleaned_tool = {}
+                    
+                    if custom_data and isinstance(custom_data, dict):
+                        for field in ["name", "description", "input_schema"]:
+                            if field in custom_data:
+                                cleaned_tool[field] = custom_data[field]
+                    
+                    # 如果 custom 子对象没有字段，尝试从顶层获取
+                    if "name" not in cleaned_tool and "name" in tool:
+                        cleaned_tool["name"] = tool["name"]
+                    if "description" not in cleaned_tool and "description" in tool:
+                        cleaned_tool["description"] = tool["description"]
+                    if "input_schema" not in cleaned_tool and "input_schema" in tool:
+                        cleaned_tool["input_schema"] = tool["input_schema"]
+                    
+                    if cleaned_tool.get("name"):
+                        cleaned_tools.append(cleaned_tool)
+                    else:
+                        logger.warning(f"跳过无效 custom 工具 {idx}: 缺少 name 字段")
+                    
+                elif tool_type == "function" or "function" in tool:
+                    # OpenAI function 格式，转换为标准 Claude 格式
+                    func = tool.get("function", {})
+                    cleaned_tool = {}
+                    
+                    if func:
+                        if "name" in func:
+                            cleaned_tool["name"] = func["name"]
+                        if "description" in func:
+                            cleaned_tool["description"] = func["description"]
+                        if "parameters" in func:
+                            cleaned_tool["input_schema"] = func["parameters"]
+                    
+                    # 如果 function 子对象没有 name，尝试从顶层获取
+                    if "name" not in cleaned_tool and "name" in tool:
+                        cleaned_tool["name"] = tool["name"]
+                    if "description" not in cleaned_tool and "description" in tool:
+                        cleaned_tool["description"] = tool["description"]
+                    
+                    if cleaned_tool.get("name"):
+                        cleaned_tools.append(cleaned_tool)
+                    else:
+                        logger.warning(f"跳过无效 function 工具 {idx}: 缺少 name 字段")
+                
+                elif tool_type is None and "name" in tool:
+                    # 标准 Claude 工具格式，只保留允许的字段
+                    cleaned_tool = {"name": tool["name"]}
+                    if "description" in tool:
+                        cleaned_tool["description"] = tool["description"]
+                    if "input_schema" in tool:
+                        cleaned_tool["input_schema"] = tool["input_schema"]
+                    if "parameters" in tool:
+                        cleaned_tool["input_schema"] = tool["parameters"]
+                    cleaned_tools.append(cleaned_tool)
+                
+                else:
+                    # 未知类型，记录警告并跳过
+                    logger.warning(f"跳过未知工具类型 {idx}: type={tool_type}, keys={list(tool.keys())}")
+            else:
+                logger.warning(f"跳过非字典工具 {idx}: {tool}")
+        
+        cleaned["tools"] = cleaned_tools
+        
+        # 调试：打印第一个工具的结构
+        if cleaned_tools:
+            logger.info(f"第一个工具结构: {json.dumps(cleaned_tools[0], ensure_ascii=False)[:500]}")
+        logger.info(f"工具清理完成: {len(cleaned['tools'])} 个工具")
+    
+    return cleaned
 
 
 def _estimate_input_tokens(openai_request: Dict[str, Any]) -> int:
