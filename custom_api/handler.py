@@ -537,13 +537,47 @@ def _clean_claude_request_for_azure(request_data: Dict[str, Any]) -> Dict[str, A
             logger.debug(f"移除不支持的字段: {field}")
             del cleaned[field]
     
+    # 跟踪是否有缺少 signature 的 thinking 块被移除
+    has_invalid_thinking = False
+    
     # 清理 messages 字段：确保所有消息都有非空 content
+    # 对于 thinking 块：保留有 signature 的，移除没有的
     if "messages" in cleaned and isinstance(cleaned["messages"], list):
         cleaned_messages = []
         for idx, msg in enumerate(cleaned["messages"]):
             if isinstance(msg, dict):
                 content = msg.get("content")
                 role = msg.get("role", "")
+                
+                # 如果 content 是列表，需要清理其中缺少 signature 的 thinking 块
+                if isinstance(content, list):
+                    cleaned_content = []
+                    for block in content:
+                        if isinstance(block, dict):
+                            block_type = block.get("type")
+                            # 检查 thinking 块是否有 signature
+                            if block_type == "thinking":
+                                if block.get("signature"):
+                                    # 有 signature，保留
+                                    cleaned_content.append(block)
+                                else:
+                                    # 没有 signature，移除
+                                    logger.debug(f"移除消息 {idx} 中缺少 signature 的 thinking 块")
+                                    has_invalid_thinking = True
+                                continue
+                            # redacted_thinking 块也需要检查
+                            if block_type == "redacted_thinking":
+                                if block.get("data"):
+                                    cleaned_content.append(block)
+                                else:
+                                    logger.debug(f"移除消息 {idx} 中无效的 redacted_thinking 块")
+                                    has_invalid_thinking = True
+                                continue
+                            cleaned_content.append(block)
+                        else:
+                            cleaned_content.append(block)
+                    content = cleaned_content
+                    msg = {**msg, "content": content}
                 
                 # 检查 content 是否为空
                 is_empty = False
@@ -567,6 +601,12 @@ def _clean_claude_request_for_azure(request_data: Dict[str, Any]) -> Dict[str, A
                 cleaned_messages.append(msg)
         
         cleaned["messages"] = cleaned_messages
+    
+    # 如果有无效的 thinking 块被移除，需要禁用 thinking 功能
+    # 因为 API 要求：启用 thinking 时，assistant 消息必须以 thinking 块开头
+    if has_invalid_thinking and "thinking" in cleaned:
+        logger.info("检测到缺少 signature 的 thinking 块，禁用 thinking 功能以避免格式错误")
+        del cleaned["thinking"]
     
     # 清理 tools 字段
     if "tools" in cleaned and isinstance(cleaned["tools"], list):
