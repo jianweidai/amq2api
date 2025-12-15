@@ -170,6 +170,7 @@ class AccountCreate(BaseModel):
     other: Optional[Dict[str, Any]] = None
     enabled: Optional[bool] = True
     type: str = "amazonq"  # amazonq, gemini, 或 custom_api
+    weight: Optional[int] = 50  # 权重，越大被选中概率越高（建议1-100）
 
 
 class AccountUpdate(BaseModel):
@@ -180,6 +181,7 @@ class AccountUpdate(BaseModel):
     accessToken: Optional[str] = None
     other: Optional[Dict[str, Any]] = None
     enabled: Optional[bool] = None
+    weight: Optional[int] = None  # 权重，越大被选中概率越高（建议1-100）
 
 
 @app.get("/")
@@ -504,28 +506,40 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
                             error_str = error_text.decode() if isinstance(error_text, bytes) else str(error_text)
                             logger.error(f"上游 API 错误: {response.status_code} {error_str}")
 
-                            # 检测月度配额用完错误
-                            if "ThrottlingException" in error_str and "MONTHLY_REQUEST_COUNT" in error_str:
-                                logger.error(f"账号 {account.get('id') if account else 'legacy'} 月度配额已用完")
-                                if account:
-                                    # 多账号模式：禁用该账号
-                                    from datetime import datetime
-                                    quota_info = {
-                                        "monthly_quota_exhausted": True,
-                                        "exhausted_at": datetime.now().isoformat()
-                                    }
-                                    current_other = account.get('other') or {}
-                                    current_other.update(quota_info)
-                                    update_account(account['id'], enabled=False, other=current_other)
-                                    raise HTTPException(
-                                        status_code=429,
-                                        detail="账号月度配额已用完，已自动禁用该账号。请等待下月重置或添加新账号。"
-                                    )
+                            # 处理 429 错误（速率限制）
+                            if response.status_code == 429:
+                                # 检测月度配额用完错误
+                                if "ThrottlingException" in error_str and "MONTHLY_REQUEST_COUNT" in error_str:
+                                    logger.error(f"账号 {account.get('id') if account else 'legacy'} 月度配额已用完")
+                                    if account:
+                                        # 多账号模式：禁用该账号
+                                        from datetime import datetime
+                                        quota_info = {
+                                            "monthly_quota_exhausted": True,
+                                            "exhausted_at": datetime.now().isoformat()
+                                        }
+                                        current_other = account.get('other') or {}
+                                        current_other.update(quota_info)
+                                        update_account(account['id'], enabled=False, other=current_other)
+                                        raise HTTPException(
+                                            status_code=429,
+                                            detail="账号月度配额已用完，已自动禁用该账号。请等待下月重置或添加新账号。"
+                                        )
+                                    else:
+                                        # 单账号模式
+                                        raise HTTPException(
+                                            status_code=429,
+                                            detail="Amazon Q 月度配额已用完，请等待下月重置。"
+                                        )
                                 else:
-                                    # 单账号模式
+                                    # 其他 429 错误（速率限制），设置 5 分钟冷却
+                                    if account:
+                                        from account_manager import set_account_cooldown
+                                        set_account_cooldown(account['id'], 300)  # 5 分钟冷却
+                                        logger.warning(f"账号 {account['id']} 触发速率限制，进入 5 分钟冷却期")
                                     raise HTTPException(
                                         status_code=429,
-                                        detail="Amazon Q 月度配额已用完，请等待下月重置。"
+                                        detail="请求过于频繁，账号已进入 5 分钟冷却期，请稍后重试"
                                     )
 
                             raise HTTPException(
@@ -783,11 +797,13 @@ async def create_gemini_message(request: Request, _: bool = Depends(verify_api_k
 
                                     # 判断是速率限制还是配额用完
                                     if remaining_fraction > 0.03:
-                                        # 配额充足，是速率限制（RPM/TPM）
-                                        logger.warning(f"账号 {account['id']} 触发速率限制（RPM/TPM），剩余配额: {remaining_fraction:.2%}")
+                                        # 配额充足，是速率限制（RPM/TPM），设置 5 分钟冷却
+                                        from account_manager import set_account_cooldown
+                                        set_account_cooldown(account['id'], 300)  # 5 分钟冷却
+                                        logger.warning(f"账号 {account['id']} 触发速率限制（RPM/TPM），进入 5 分钟冷却期，剩余配额: {remaining_fraction:.2%}")
                                         raise HTTPException(
                                             status_code=429,
-                                            detail=f"速率限制：请求过于频繁，请稍后重试（剩余配额: {remaining_fraction:.2%}）"
+                                            detail=f"速率限制：账号已进入 5 分钟冷却期，请稍后重试（剩余配额: {remaining_fraction:.2%}）"
                                         )
                                     else:
                                         # 配额不足，真的用完了
@@ -990,7 +1006,8 @@ async def create_account_endpoint(body: AccountCreate, _: bool = Depends(verify_
             access_token=body.accessToken,
             other=body.other,
             enabled=body.enabled if body.enabled is not None else True,
-            account_type=body.type
+            account_type=body.type,
+            weight=body.weight if body.weight is not None else 50
         )
         return JSONResponse(content=account)
     except Exception as e:
@@ -1010,7 +1027,8 @@ async def update_account_endpoint(account_id: str, body: AccountUpdate, _: bool 
             refresh_token=body.refreshToken,
             access_token=body.accessToken,
             other=body.other,
-            enabled=body.enabled
+            enabled=body.enabled,
+            weight=body.weight
         )
         if not account:
             raise HTTPException(status_code=404, detail="账号不存在")

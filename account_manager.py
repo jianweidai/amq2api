@@ -12,9 +12,76 @@ import logging
 import os
 from pathlib import Path
 from typing import Dict, List, Any, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
+
+# ============== 账号冷却机制 ==============
+# 存储账号冷却结束时间 {account_id: cooldown_end_timestamp}
+_account_cooldowns: Dict[str, float] = {}
+# 默认冷却时间（秒）
+DEFAULT_COOLDOWN_SECONDS = 300  # 5 分钟
+
+
+def set_account_cooldown(account_id: str, cooldown_seconds: int = DEFAULT_COOLDOWN_SECONDS) -> None:
+    """设置账号冷却时间
+    
+    Args:
+        account_id: 账号 ID
+        cooldown_seconds: 冷却时间（秒），默认 5 分钟
+    """
+    cooldown_end = time.time() + cooldown_seconds
+    _account_cooldowns[account_id] = cooldown_end
+    logger.info(f"账号 {account_id} 进入冷却期 {cooldown_seconds} 秒，将在 {datetime.fromtimestamp(cooldown_end).strftime('%H:%M:%S')} 后恢复")
+
+
+def is_account_in_cooldown(account_id: str) -> bool:
+    """检查账号是否在冷却中
+    
+    Args:
+        account_id: 账号 ID
+    
+    Returns:
+        True 如果账号在冷却中，False 如果可用
+    """
+    if account_id not in _account_cooldowns:
+        return False
+    
+    cooldown_end = _account_cooldowns[account_id]
+    if time.time() >= cooldown_end:
+        # 冷却已结束，清除记录
+        del _account_cooldowns[account_id]
+        logger.info(f"账号 {account_id} 冷却期已结束，恢复可用")
+        return False
+    
+    return True
+
+
+def get_account_cooldown_remaining(account_id: str) -> int:
+    """获取账号剩余冷却时间（秒）
+    
+    Args:
+        account_id: 账号 ID
+    
+    Returns:
+        剩余冷却时间（秒），如果不在冷却中返回 0
+    """
+    if account_id not in _account_cooldowns:
+        return 0
+    
+    remaining = _account_cooldowns[account_id] - time.time()
+    return max(0, int(remaining))
+
+
+def clear_account_cooldown(account_id: str) -> None:
+    """清除账号冷却状态
+    
+    Args:
+        account_id: 账号 ID
+    """
+    if account_id in _account_cooldowns:
+        del _account_cooldowns[account_id]
+        logger.info(f"账号 {account_id} 冷却状态已清除")
 
 # ============== 数据库配置 ==============
 
@@ -73,11 +140,13 @@ def _sqlite_ensure_db():
             """
         )
 
-        # 迁移：为已存在的表添加 type 字段
+        # 迁移：为已存在的表添加新字段
         cursor = conn.execute("PRAGMA table_info(accounts)")
         columns = [row[1] for row in cursor.fetchall()]
         if 'type' not in columns:
             conn.execute("ALTER TABLE accounts ADD COLUMN type TEXT DEFAULT 'amazonq'")
+        if 'weight' not in columns:
+            conn.execute("ALTER TABLE accounts ADD COLUMN weight INTEGER DEFAULT 50")
 
         conn.commit()
 
@@ -144,10 +213,15 @@ def _mysql_ensure_db():
                     created_at VARCHAR(32),
                     updated_at VARCHAR(32),
                     enabled TINYINT DEFAULT 1,
-                    type VARCHAR(32) DEFAULT 'amazonq'
+                    type VARCHAR(32) DEFAULT 'amazonq',
+                    weight INT DEFAULT 50
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                 """
             )
+            # 迁移：为已存在的表添加 weight 字段
+            cursor.execute(f"SHOW COLUMNS FROM `{ACCOUNTS_TABLE}` LIKE 'weight'")
+            if not cursor.fetchone():
+                cursor.execute(f"ALTER TABLE `{ACCOUNTS_TABLE}` ADD COLUMN weight INT DEFAULT 50")
         conn.commit()
     finally:
         conn.close()
@@ -254,8 +328,37 @@ def get_account(account_id: str) -> Optional[Dict[str, Any]]:
             return _row_to_dict(row) if row else None
 
 
+def _weighted_random_choice(accounts: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """根据权重随机选择账号（权重越大，被选中概率越高）
+    
+    权重直接作为选择概率的比例。
+    例如：权重30的账号和权重70的账号，被选中概率分别是30%和70%
+    
+    Args:
+        accounts: 账号列表
+    
+    Returns:
+        随机选中的账号
+    """
+    if not accounts:
+        return None
+    
+    if len(accounts) == 1:
+        return accounts[0]
+    
+    # 直接使用权重作为选择概率（权重越大，被选中概率越高）
+    weights = []
+    for acc in accounts:
+        weight = acc.get('weight', 50) or 50  # 默认权重 50
+        weights.append(max(1, weight))  # 确保权重至少为 1
+    
+    # 使用 random.choices 进行加权随机选择
+    selected = random.choices(accounts, weights=weights, k=1)
+    return selected[0] if selected else None
+
+
 def get_random_account(account_type: Optional[str] = None, model: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """随机选择一个启用的账号
+    """随机选择一个启用的账号（支持权重，权重越大被选中概率越高）
 
     Args:
         account_type: 账号类型 ('amazonq' 或 'gemini')
@@ -268,24 +371,34 @@ def get_random_account(account_type: Optional[str] = None, model: Optional[str] 
     if not accounts:
         return None
 
+    # 过滤掉冷却中的账号
+    available_accounts = [acc for acc in accounts if not is_account_in_cooldown(acc.get('id'))]
+    
+    if not available_accounts:
+        # 如果所有账号都在冷却中，记录日志但仍返回 None
+        logger.warning(f"所有 {account_type or '全部'} 类型的账号都在冷却中")
+        return None
+
     # 如果是 Gemini 账号且指定了模型，需要检查配额
     if account_type == "gemini" and model:
-        available_accounts = []
-        for account in accounts:
+        filtered_accounts = []
+        for account in available_accounts:
             if is_model_available_for_account(account, model):
-                available_accounts.append(account)
+                filtered_accounts.append(account)
+        available_accounts = filtered_accounts
 
         if not available_accounts:
             logger.warning(f"没有可用的 Gemini 账号支持模型 {model}")
             return None
 
-        return random.choice(available_accounts)
-
-    return random.choice(accounts)
+    return _weighted_random_choice(available_accounts)
 
 
 def get_random_channel_by_model(model: str) -> Optional[str]:
-    """根据模型智能选择渠道（按账号数量加权）
+    """根据模型智能选择渠道（按账号权重加权，权重越大被选中概率越高）
+
+    直接从所有可用账号中按权重选择一个账号，然后返回该账号的渠道类型。
+    例如：权重70的账号和权重30的账号，被选中概率分别是70%和30%。
 
     Args:
         model: 请求的模型名称
@@ -302,6 +415,7 @@ def get_random_channel_by_model(model: str) -> Optional[str]:
     # 如果是 Gemini 独占模型
     if model.startswith('gemini') or model in gemini_only_models:
         gemini_accounts = list_enabled_accounts(account_type='gemini')
+        gemini_accounts = [acc for acc in gemini_accounts if not is_account_in_cooldown(acc.get('id'))]
         if gemini_accounts:
             return 'gemini'
         return None
@@ -315,33 +429,39 @@ def get_random_channel_by_model(model: str) -> Optional[str]:
     # 如果是 Amazon Q 独占模型
     if model in amazonq_only_models:
         amazonq_accounts = list_enabled_accounts(account_type='amazonq')
+        amazonq_accounts = [acc for acc in amazonq_accounts if not is_account_in_cooldown(acc.get('id'))]
         if amazonq_accounts:
             return 'amazonq'
         return None
 
-    # 对于其他模型，按账号数量加权随机选择（包括 custom_api）
+    # 对于其他模型，从所有账号中按权重选择
+    all_accounts = []
+    
     amazonq_accounts = list_enabled_accounts(account_type='amazonq')
     gemini_accounts = list_enabled_accounts(account_type='gemini')
     custom_api_accounts = list_enabled_accounts(account_type='custom_api')
+    
+    # 过滤冷却中的账号并合并
+    for acc in amazonq_accounts:
+        if not is_account_in_cooldown(acc.get('id')):
+            all_accounts.append(acc)
+    for acc in gemini_accounts:
+        if not is_account_in_cooldown(acc.get('id')):
+            all_accounts.append(acc)
+    for acc in custom_api_accounts:
+        if not is_account_in_cooldown(acc.get('id')):
+            all_accounts.append(acc)
 
-    amazonq_count = len(amazonq_accounts)
-    gemini_count = len(gemini_accounts)
-    custom_api_count = len(custom_api_accounts)
-
-    total = amazonq_count + gemini_count + custom_api_count
-
-    if total == 0:
+    if not all_accounts:
         return None
 
-    # 按账号数量加权随机选择
-    rand = random.randint(1, total)
-
-    if rand <= amazonq_count:
-        return 'amazonq'
-    elif rand <= amazonq_count + gemini_count:
-        return 'gemini'
-    else:
-        return 'custom_api'
+    # 直接按权重选择账号（权重越小，被选中概率越大）
+    selected_account = _weighted_random_choice(all_accounts)
+    
+    if selected_account:
+        return selected_account.get('type', 'amazonq')
+    
+    return None
 
 
 def create_account(
@@ -352,7 +472,8 @@ def create_account(
     access_token: Optional[str] = None,
     other: Optional[Dict[str, Any]] = None,
     enabled: bool = True,
-    account_type: str = "amazonq"
+    account_type: str = "amazonq",
+    weight: int = 50
 ) -> Dict[str, Any]:
     """创建新账号"""
     now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
@@ -365,10 +486,10 @@ def create_account(
             with conn.cursor() as cursor:
                 cursor.execute(
                     f"""
-                    INSERT INTO `{ACCOUNTS_TABLE}` (id, label, clientId, clientSecret, refreshToken, accessToken, other, last_refresh_time, last_refresh_status, created_at, updated_at, enabled, type)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO `{ACCOUNTS_TABLE}` (id, label, clientId, clientSecret, refreshToken, accessToken, other, last_refresh_time, last_refresh_status, created_at, updated_at, enabled, type, weight)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (acc_id, label, client_id, client_secret, refresh_token, access_token, other_str, None, "never", now, now, 1 if enabled else 0, account_type)
+                    (acc_id, label, client_id, client_secret, refresh_token, access_token, other_str, None, "never", now, now, 1 if enabled else 0, account_type, weight)
                 )
                 cursor.execute(f"SELECT * FROM `{ACCOUNTS_TABLE}` WHERE id=%s", (acc_id,))
                 row = cursor.fetchone()
@@ -379,10 +500,10 @@ def create_account(
         with _sqlite_conn() as conn:
             conn.execute(
                 f"""
-                INSERT INTO {ACCOUNTS_TABLE} (id, label, clientId, clientSecret, refreshToken, accessToken, other, last_refresh_time, last_refresh_status, created_at, updated_at, enabled, type)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO {ACCOUNTS_TABLE} (id, label, clientId, clientSecret, refreshToken, accessToken, other, last_refresh_time, last_refresh_status, created_at, updated_at, enabled, type, weight)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (acc_id, label, client_id, client_secret, refresh_token, access_token, other_str, None, "never", now, now, 1 if enabled else 0, account_type)
+                (acc_id, label, client_id, client_secret, refresh_token, access_token, other_str, None, "never", now, now, 1 if enabled else 0, account_type, weight)
             )
             conn.commit()
             row = conn.execute(f"SELECT * FROM {ACCOUNTS_TABLE} WHERE id=?", (acc_id,)).fetchone()
@@ -397,7 +518,8 @@ def update_account(
     refresh_token: Optional[str] = None,
     access_token: Optional[str] = None,
     other: Optional[Dict[str, Any]] = None,
-    enabled: Optional[bool] = None
+    enabled: Optional[bool] = None,
+    weight: Optional[int] = None
 ) -> Optional[Dict[str, Any]]:
     """更新账号信息"""
     now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
@@ -425,6 +547,9 @@ def update_account(
     if enabled is not None:
         fields.append("enabled")
         values.append(1 if enabled else 0)
+    if weight is not None:
+        fields.append("weight")
+        values.append(weight)
 
     if not fields:
         return get_account(account_id)
