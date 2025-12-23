@@ -571,7 +571,8 @@ async def create_gemini_message(request: Request, _: bool = Depends(verify_api_k
         claude_req = parse_claude_request(request_data)
 
         # 检查是否指定了特定账号（用于测试）
-        specified_account_id = request.headers.get("X-Account-ID")
+        # specified_account_id = request.headers.get("X-Account-ID")
+        specified_account_id = getattr(request.state, 'account_id', None) or request.headers.get("X-Account-ID")
 
         if specified_account_id:
             # 使用指定的账号
@@ -775,10 +776,10 @@ async def create_gemini_message(request: Request, _: bool = Depends(verify_api_k
                             logger.info(f"找到可用账号 {new_account['id']}，正在重试...")
                             # 通过修改请求头来指定新账号，递归调用
                             original_account_id = request.headers.get("X-Account-ID")
-                            request._state.account_id = new_account['id']
+                            request.state.account_id = new_account['id']
                             # 修改请求头
-                            request.scope["headers"] = [(k, v) for k, v in request.scope["headers"] if k != b"x-account-id"]
-                            request.scope["headers"].append((b"x-account-id", new_account['id'].encode()))
+                            # request.scope["headers"] = [(k, v) for k, v in request.scope["headers"] if k != b"x-account-id"]
+                            # request.scope["headers"].append((b"x-account-id", new_account['id'].encode()))
                             return await create_gemini_message(request, _)
                         else:
                             logger.warning(f"没有其他可用的 Gemini 账号，返回 429 错误")
