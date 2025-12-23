@@ -83,6 +83,17 @@ def convert_claude_to_gemini(claude_req: ClaudeRequest, project: str) -> Dict[st
     Returns:
         Gemini 请求字典
     """
+    # 第一步：构建 tool_use_id -> tool_name 的映射
+    tool_id_to_name = {}
+    for msg in claude_req.messages:
+        if isinstance(msg.content, list):
+            for item in msg.content:
+                if isinstance(item, dict) and item.get("type") == "tool_use":
+                    tool_id = item.get("id")
+                    tool_name = item.get("name")
+                    if tool_id and tool_name:
+                        tool_id_to_name[tool_id] = tool_name
+
     # 转换消息格式
     contents = []
     for msg in claude_req.messages:
@@ -143,10 +154,16 @@ def convert_claude_to_gemini(claude_req: ClaudeRequest, project: str) -> Dict[st
                         content = item.get("content", "")
                         if isinstance(content, list):
                             content = content[0].get("text", "") if content else ""
+                        # 获取 tool_use_id 对应的 name
+                        tool_use_id = item.get("tool_use_id")
+                        # 优先使用 item 中的 name，如果没有则从映射中查找
+                        tool_name = item.get("name") or tool_id_to_name.get(tool_use_id, "")
+                        if not tool_name:
+                            logger.warning(f"tool_result 缺少 name 字段，tool_use_id: {tool_use_id}")
                         parts.append({
                             "functionResponse": {
-                                "id": item.get("tool_use_id"),
-                                "name": item.get("name", ""),
+                                "id": tool_use_id,
+                                "name": tool_name,
                                 "response": {"output": content}
                             }
                         })
@@ -161,6 +178,11 @@ def convert_claude_to_gemini(claude_req: ClaudeRequest, project: str) -> Dict[st
                 })
         else:
             parts = [{"text": str(msg.content)}]
+
+        # 跳过空 parts 的消息，避免 Gemini 400 错误
+        if not parts:
+            logger.warning(f"跳过空 content 的消息，role: {msg.role}")
+            continue
 
         contents.append({
             "role": role,
@@ -241,7 +263,7 @@ def map_claude_model_to_gemini(claude_model: str) -> str:
         "gemini-3-pro-low", "gemini-3-pro-high", "gemini-2.5-flash-lite",
         "gemini-2.5-flash-image", "gemini-2.5-flash-image",
         "claude-sonnet-4-5", "claude-sonnet-4-5-thinking", "claude-opus-4-5-thinking",
-        "gpt-oss-120b-medium"
+        "gpt-oss-120b-medium", "gemini-3-flash"
     }
 
     if claude_model in supported_models:
@@ -257,7 +279,7 @@ def map_claude_model_to_gemini(claude_model: str) -> str:
         "claude-3-haiku-20240307": "gemini-2.5-flash"
     }
 
-    return model_mapping.get(claude_model, "claude-sonnet-4-5")
+    return model_mapping.get(claude_model, "gemini-3-flash")
 
 
 def reorganize_tool_messages(contents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -426,6 +448,8 @@ def clean_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
         "maximum": "maximum",
         "minItems": "minItems",
         "maxItems": "maxItems",
+        "exclusiveMaximum": "exclusiveMaximum",
+        "exclusiveMinimum": "exclusiveMinimum"
     }
 
     # 需要完全移除的字段

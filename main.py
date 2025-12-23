@@ -217,6 +217,7 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
         # 转换为 ClaudeRequest 对象
         claude_req = parse_claude_request(request_data)
 
+        from config import read_global_config
         # 获取配置
         config = await read_global_config()
 

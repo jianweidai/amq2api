@@ -129,6 +129,7 @@ def get_random_channel_by_model(model: str) -> Optional[str]:
     gemini_only_models = [
         'claude-sonnet-4-5-thinking',  # Claude thinking 模型
         'claude-opus-4-5-thinking',  # Claude thinking 模型
+        'gemini-3-flash'
     ]
 
     # 如果是 Gemini 独占模型（以 gemini 开头或在独占列表中）

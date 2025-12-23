@@ -182,7 +182,7 @@ async def main():
         print(f"  {tokens.get('refresh_token', '未获取到 refresh_token')}")
         print()
         print(f"Access Token:")
-        print(f"  {tokens.get('access_token', 'N/A')[:50]}...")
+        print(f"  {tokens.get('access_token', 'N/A')}...")
         print()
         print(f"Expires In:")
         print(f"  {tokens.get('expires_in', 'N/A')} 秒")
