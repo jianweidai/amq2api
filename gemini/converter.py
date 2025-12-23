@@ -219,6 +219,8 @@ def convert_claude_to_gemini(claude_req: ClaudeRequest, project: str) -> Dict[st
 
     # 重新组织消息，确保 tool_use 后紧跟对应的 tool_result
     # contents = reorganize_tool_messages(contents)
+    think_config = get_thinking_config(claude_req.thinking)
+    max_tokens = max(claude_req.max_tokens, think_config.get("thinkingBudget"))
 
     # 构建 Gemini 请求
     gemini_request = {
@@ -231,9 +233,9 @@ def convert_claude_to_gemini(claude_req: ClaudeRequest, project: str) -> Dict[st
                 "topP": 1,
                 "topK": 40,
                 "candidateCount": 1,
-                "maxOutputTokens": claude_req.max_tokens,
+                "maxOutputTokens": max_tokens + 1,
                 "stopSequences": ["<|user|>", "<|bot|>", "<|context_request|>", "<|endoftext|>", "<|end_of_turn|>"],
-                "thinkingConfig": get_thinking_config(claude_req.thinking)
+                "thinkingConfig": think_config
             },
             "sessionId": "-3750763034362895578",
         },
