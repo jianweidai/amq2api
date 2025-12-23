@@ -107,7 +107,7 @@ def convert_claude_to_gemini(claude_req: ClaudeRequest, project: str) -> Dict[st
                 if isinstance(item, dict):
                     if item.get("type") == "thinking":
                         has_thinking = True
-                    elif item.get("type") == "text" and item.get("text", "").strip():
+                    elif item.get("type") != "thinking":
                         has_text = True
 
             # 如果只有 thinking 没有实质内容，添加提示文本
