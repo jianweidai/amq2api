@@ -158,6 +158,51 @@
     </div>
 
     <div class="panel">
+      <h2>Gemini 渠道配置</h2>
+      <div class="row">
+        <button onclick="loadConfig()">加载配置</button>
+        <button onclick="syncModels()">同步官方模型</button>
+        <div id="sync_status" class="chip" style="display:none"></div>
+      </div>
+      <div id="config_editor" style="margin-top:16px;display:none">
+        <h3>Gemini 支持的所有模型</h3>
+        <p style="color:var(--muted);font-size:13px;margin-bottom:8px">从官方 API 同步的模型列表（只读）</p>
+        <div id="config_supported_list" class="list" style="max-height:200px;overflow-y:auto;background:var(--bg);border-radius:10px;padding:12px"></div>
+
+        <h3>Gemini 独占模型</h3>
+        <p style="color:var(--muted);font-size:13px;margin-bottom:8px">只能使用 Gemini 渠道的模型</p>
+        <div id="config_gemini_only_list" class="list"></div>
+        <div class="row" style="margin-top:8px">
+          <input id="new_gemini_only" placeholder="输入模型名称" style="flex:1" />
+          <button onclick="addGeminiOnly()">添加</button>
+        </div>
+
+        <h3>Amazon Q 独占模型</h3>
+        <p style="color:var(--muted);font-size:13px;margin-bottom:8px">只能使用 Amazon Q 渠道的模型</p>
+        <div id="config_amazonq_only_list" class="list"></div>
+        <div class="row" style="margin-top:8px">
+          <input id="new_amazonq_only" placeholder="输入模型名称" style="flex:1" />
+          <button onclick="addAmazonQOnly()">添加</button>
+        </div>
+
+        <h3>模型名称映射</h3>
+        <p style="color:var(--muted);font-size:13px;margin-bottom:8px">Claude 标准名称 → Gemini 模型名称</p>
+        <div id="config_mapping_list" class="list"></div>
+        <div class="row" style="margin-top:8px">
+          <input id="new_mapping_from" placeholder="源模型名" style="flex:1" />
+          <span style="color:var(--muted)">→</span>
+          <input id="new_mapping_to" placeholder="目标模型名" style="flex:1" />
+          <button onclick="addMapping()">添加</button>
+        </div>
+
+        <div class="row" style="margin-top:16px">
+          <button onclick="saveConfig()">保存配置</button>
+          <button class="btn-secondary" onclick="document.getElementById('config_editor').style.display='none'">取消</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
       <h2>账号列表</h2>
       <div class="row">
         <button onclick="loadAccounts()">刷新列表</button>
@@ -1164,6 +1209,184 @@ async function refreshAllTokens() {
   } catch(e) {
     setTestStatus('批量刷新失败', false);
     alert('批量刷新失败：' + e.message);
+  }
+}
+
+function setSyncStatus(text, ok=true) {
+  const el = document.getElementById('sync_status');
+  el.textContent = text;
+  el.className = ok ? 'chip success' : 'chip danger';
+  el.style.display = 'inline-flex';
+}
+
+let configData = {
+  gemini_only_models: [],
+  amazonq_only_models: [],
+  supported_models: [],
+  model_mapping: {}
+};
+
+function renderConfigList(containerId, items, onDelete) {
+  const container = document.getElementById(containerId);
+  container.innerHTML = '';
+  if (!items || items.length === 0) {
+    container.innerHTML = '<p style="color:var(--muted);font-size:13px">暂无配置</p>';
+    return;
+  }
+  items.forEach(item => {
+    const div = document.createElement('div');
+    div.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px';
+    div.innerHTML = `<span class="mono" style="flex:1;font-size:13px">${item}</span><button class="btn-danger" style="padding:4px 8px;font-size:12px">删除</button>`;
+    div.querySelector('button').onclick = () => onDelete(item);
+    container.appendChild(div);
+  });
+}
+
+function renderMappingList(items, onDelete) {
+  const container = document.getElementById('config_mapping_list');
+  container.innerHTML = '';
+  const entries = Object.entries(items || {});
+  if (entries.length === 0) {
+    container.innerHTML = '<p style="color:var(--muted);font-size:13px">暂无映射</p>';
+    return;
+  }
+  entries.forEach(([from, to]) => {
+    const div = document.createElement('div');
+    div.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px';
+    div.innerHTML = `<span class="mono" style="flex:1;font-size:13px">${from} → ${to}</span><button class="btn-danger" style="padding:4px 8px;font-size:12px">删除</button>`;
+    div.querySelector('button').onclick = () => onDelete(from);
+    container.appendChild(div);
+  });
+}
+
+function addGeminiOnly() {
+  const input = document.getElementById('new_gemini_only');
+  const value = input.value.trim();
+  if (!value) return;
+  if (configData.gemini_only_models.includes(value)) {
+    alert('模型已存在');
+    return;
+  }
+  configData.gemini_only_models.push(value);
+  renderConfigList('config_gemini_only_list', configData.gemini_only_models, (item) => {
+    configData.gemini_only_models = configData.gemini_only_models.filter(m => m !== item);
+    renderConfigList('config_gemini_only_list', configData.gemini_only_models, arguments.callee);
+  });
+  input.value = '';
+}
+
+function addAmazonQOnly() {
+  const input = document.getElementById('new_amazonq_only');
+  const value = input.value.trim();
+  if (!value) return;
+  if (configData.amazonq_only_models.includes(value)) {
+    alert('模型已存在');
+    return;
+  }
+  configData.amazonq_only_models.push(value);
+  renderConfigList('config_amazonq_only_list', configData.amazonq_only_models, (item) => {
+    configData.amazonq_only_models = configData.amazonq_only_models.filter(m => m !== item);
+    renderConfigList('config_amazonq_only_list', configData.amazonq_only_models, arguments.callee);
+  });
+  input.value = '';
+}
+
+function addMapping() {
+  const fromInput = document.getElementById('new_mapping_from');
+  const toInput = document.getElementById('new_mapping_to');
+  const from = fromInput.value.trim();
+  const to = toInput.value.trim();
+  if (!from || !to) {
+    alert('请输入完整的映射关系');
+    return;
+  }
+  if (configData.model_mapping[from]) {
+    alert('源模型已存在映射');
+    return;
+  }
+  configData.model_mapping[from] = to;
+  renderMappingList(configData.model_mapping, (key) => {
+    delete configData.model_mapping[key];
+    renderMappingList(configData.model_mapping, arguments.callee);
+  });
+  fromInput.value = '';
+  toInput.value = '';
+}
+
+async function loadConfig() {
+  try {
+    const r = await authFetch('/v2/config');
+    if (!r.ok) throw new Error(await r.text());
+    const config = await r.json();
+
+    configData = {
+      gemini_only_models: config.gemini_only_models || [],
+      amazonq_only_models: config.amazonq_only_models || [],
+      supported_models: config.supported_models || [],
+      model_mapping: config.model_mapping || {}
+    };
+
+    renderConfigList('config_supported_list', configData.supported_models, null);
+    renderConfigList('config_gemini_only_list', configData.gemini_only_models, (item) => {
+      configData.gemini_only_models = configData.gemini_only_models.filter(m => m !== item);
+      renderConfigList('config_gemini_only_list', configData.gemini_only_models, arguments.callee);
+    });
+    renderConfigList('config_amazonq_only_list', configData.amazonq_only_models, (item) => {
+      configData.amazonq_only_models = configData.amazonq_only_models.filter(m => m !== item);
+      renderConfigList('config_amazonq_only_list', configData.amazonq_only_models, arguments.callee);
+    });
+    renderMappingList(configData.model_mapping, (key) => {
+      delete configData.model_mapping[key];
+      renderMappingList(configData.model_mapping, arguments.callee);
+    });
+
+    document.getElementById('config_editor').style.display = 'block';
+    setSyncStatus('配置已加载', true);
+  } catch(e) {
+    alert('加载配置失败：' + e.message);
+  }
+}
+
+async function saveConfig() {
+  try {
+    const r = await authFetch('/v2/config', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        gemini_only_models: configData.gemini_only_models,
+        amazonq_only_models: configData.amazonq_only_models,
+        supported_models: configData.supported_models,
+        model_mapping: configData.model_mapping
+      })
+    });
+
+    if (!r.ok) throw new Error(await r.text());
+    setSyncStatus('配置已保存', true);
+    setTimeout(() => { document.getElementById('sync_status').style.display = 'none'; }, 3000);
+  } catch(e) {
+    alert('保存配置失败：' + e.message);
+  }
+}
+
+async function syncModels() {
+  if (!confirm('确认同步官方模型列表？这将从 Anthropic 和 Google 官方获取最新的模型列表。')) {
+    return;
+  }
+
+  setSyncStatus('正在同步...', true);
+
+  try {
+    const r = await authFetch('/v2/config/sync-models', { method: 'POST' });
+    if (!r.ok) throw new Error(await r.text());
+
+    const data = await r.json();
+    setSyncStatus(`同步成功：${data.total_models} 个模型`, true);
+
+    // 自动重新加载配置
+    await loadConfig();
+  } catch(e) {
+    setSyncStatus('同步失败', false);
+    alert('同步模型失败：' + e.message);
   }
 }
 

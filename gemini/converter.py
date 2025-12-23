@@ -285,27 +285,13 @@ def map_claude_model_to_gemini(claude_model: str) -> str:
     Returns:
         Gemini 模型名称
     """
-    # 支持的所有模型（直接透传）
-    supported_models = {
-        "gemini-2.5-flash", "gemini-2.5-flash-thinking", "gemini-2.5-pro",
-        "gemini-3-pro-low", "gemini-3-pro-high", "gemini-2.5-flash-lite",
-        "gemini-2.5-flash-image", "gemini-2.5-flash-image",
-        "claude-sonnet-4-5", "claude-sonnet-4-5-thinking", "claude-opus-4-5-thinking",
-        "gpt-oss-120b-medium", "gemini-3-flash"
-    }
+    # 从数据库读取配置
+    from account_manager import get_config
+    supported_models = get_config("supported_models") or []
+    model_mapping = get_config("model_mapping") or {}
 
     if claude_model in supported_models:
         return claude_model
-
-    # Claude 标准模型名称映射
-    model_mapping = {
-        "claude-sonnet-4.5": "claude-sonnet-4-5",
-        "claude-3-5-sonnet-20241022": "claude-sonnet-4-5",
-        "claude-3-5-sonnet-20240620": "claude-sonnet-4-5",
-        "claude-opus-4": "gemini-3-pro-high",
-        "claude-haiku-4": "claude-haiku-4.5",
-        "claude-3-haiku-20240307": "gemini-2.5-flash"
-    }
 
     return model_mapping.get(claude_model, "gemini-3-flash")
 

@@ -173,6 +173,33 @@ async def health():
         }
 
 
+@app.get("/v1/models")
+async def list_models():
+    """列出所有可用模型（Amazon Q 独占模型 + Gemini 支持的所有模型）"""
+    from account_manager import get_config
+
+    amazonq_only = get_config("amazonq_only_models") or []
+    supported_models = get_config("supported_models") or []
+
+    # 合并并去重
+    all_models = list(set(amazonq_only + supported_models))
+    all_models.sort()
+
+    # 返回 OpenAI 兼容格式
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": model,
+                "object": "model",
+                "created": 1677610602,
+                "owned_by": "amazon-q" if model in amazonq_only else "gemini"
+            }
+            for model in all_models
+        ]
+    }
+
+
 @app.post("/v1/messages")
 async def create_message(request: Request, _: bool = Depends(verify_api_key)):
     """
@@ -1031,6 +1058,67 @@ async def get_account_quota(account_id: str, _: bool = Depends(verify_admin_key)
     except Exception as e:
         logger.error(f"获取配额信息失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取配额信息失败: {str(e)}")
+
+
+# 配置管理 API
+@app.get("/v2/config")
+async def get_config_endpoint(_: bool = Depends(verify_admin_key)):
+    """获取所有配置"""
+    from account_manager import get_all_config
+    config = get_all_config()
+    return JSONResponse(content=config)
+
+
+@app.patch("/v2/config")
+async def update_config_endpoint(request: Request, _: bool = Depends(verify_admin_key)):
+    """更新配置"""
+    try:
+        from account_manager import set_config
+        data = await request.json()
+        for key, value in data.items():
+            set_config(key, value)
+        return JSONResponse(content={"success": True})
+    except Exception as e:
+        logger.error(f"更新配置失败: {e}")
+        raise HTTPException(status_code=500, detail=f"更新配置失败: {str(e)}")
+
+
+@app.post("/v2/config/sync-models")
+async def sync_models_endpoint(_: bool = Depends(verify_admin_key)):
+    """同步官方模型列表（从随机 Gemini 账号获取）"""
+    try:
+        # 随机选择一个 Gemini 账号
+        gemini_account = get_random_account(account_type="gemini")
+        if not gemini_account:
+            raise HTTPException(status_code=404, detail="没有可用的 Gemini 账号")
+
+        other = gemini_account.get("other") or {}
+        token_manager = GeminiTokenManager(
+            client_id=gemini_account["clientId"],
+            client_secret=gemini_account["clientSecret"],
+            refresh_token=gemini_account["refreshToken"],
+            api_endpoint=other.get("api_endpoint", "https://daily-cloudcode-pa.sandbox.googleapis.com")
+        )
+
+        project_id = other.get("project") or await token_manager.get_project_id()
+        models_data = await token_manager.fetch_available_models(project_id)
+
+        # 提取模型列表
+        models = models_data.get("models", {})
+        model_list = list(models.keys())
+
+        # 更新 supported_models 配置
+        from account_manager import set_config
+        set_config("supported_models", model_list)
+
+        return JSONResponse(content={
+            "success": True,
+            "models": model_list,
+            "count": len(model_list)
+        })
+    except Exception as e:
+        logger.error(f"同步模型列表失败: {e}")
+        raise HTTPException(status_code=500, detail=f"同步模型列表失败: {str(e)}")
 
 
 # 管理页面

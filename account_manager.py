@@ -53,7 +53,59 @@ def _ensure_db():
         if 'type' not in columns:
             conn.execute("ALTER TABLE accounts ADD COLUMN type TEXT DEFAULT 'amazonq'")
 
+        # 创建配置表
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS config (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+
+        # 初始化默认配置
+        _init_default_config(conn)
+
         conn.commit()
+
+
+def _init_default_config(conn):
+    """初始化默认配置"""
+    now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+
+    # 默认配置
+    defaults = {
+        "gemini_only_models": json.dumps([
+            "claude-sonnet-4-5-thinking",
+            "claude-opus-4-5-thinking",
+            "gemini-3-flash"
+        ]),
+        "amazonq_only_models": json.dumps([
+            "claude-sonnet-4",
+            "claude-sonnet-4.5",
+            "claude-haiku-4.5"
+        ]),
+        "supported_models": json.dumps([
+            "gemini-2.5-flash", "gemini-2.5-flash-thinking", "gemini-2.5-pro",
+            "gemini-3-pro-low", "gemini-3-pro-high", "gemini-2.5-flash-lite",
+            "gemini-2.5-flash-image", "claude-sonnet-4-5", "claude-sonnet-4-5-thinking",
+            "claude-opus-4-5-thinking", "gpt-oss-120b-medium", "gemini-3-flash"
+        ]),
+        "model_mapping": json.dumps({
+            "claude-sonnet-4.5": "claude-sonnet-4-5",
+            "claude-3-5-sonnet-20241022": "claude-sonnet-4-5",
+            "claude-3-5-sonnet-20240620": "claude-sonnet-4-5",
+            "claude-opus-4": "gemini-3-pro-high",
+            "claude-haiku-4": "claude-haiku-4.5",
+            "claude-3-haiku-20240307": "gemini-2.5-flash"
+        })
+    }
+
+    for key, value in defaults.items():
+        existing = conn.execute("SELECT 1 FROM config WHERE key=?", (key,)).fetchone()
+        if not existing:
+            conn.execute("INSERT INTO config (key, value, updated_at) VALUES (?, ?, ?)", (key, value, now))
 
 
 def _conn() -> sqlite3.Connection:
@@ -116,6 +168,43 @@ def get_random_account(account_type: Optional[str] = None, model: Optional[str] 
     return random.choice(accounts)
 
 
+def get_config(key: str) -> Optional[Any]:
+    """获取配置值"""
+    with _conn() as conn:
+        row = conn.execute("SELECT value FROM config WHERE key=?", (key,)).fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row[0])
+        except:
+            return row[0]
+
+
+def set_config(key: str, value: Any) -> None:
+    """设置配置值"""
+    now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+    value_str = json.dumps(value) if not isinstance(value, str) else value
+    with _conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO config (key, value, updated_at) VALUES (?, ?, ?)",
+            (key, value_str, now)
+        )
+        conn.commit()
+
+
+def get_all_config() -> Dict[str, Any]:
+    """获取所有配置"""
+    with _conn() as conn:
+        rows = conn.execute("SELECT key, value FROM config").fetchall()
+        result = {}
+        for row in rows:
+            try:
+                result[row[0]] = json.loads(row[1])
+            except:
+                result[row[0]] = row[1]
+        return result
+
+
 def get_random_channel_by_model(model: str) -> Optional[str]:
     """根据模型智能选择渠道（按账号数量加权）
 
@@ -125,12 +214,9 @@ def get_random_channel_by_model(model: str) -> Optional[str]:
     Returns:
         渠道名称 ('amazonq' 或 'gemini')，如果没有可用账号则返回 None
     """
-    # Gemini 独占模型
-    gemini_only_models = [
-        'claude-sonnet-4-5-thinking',  # Claude thinking 模型
-        'claude-opus-4-5-thinking',  # Claude thinking 模型
-        'gemini-3-flash'
-    ]
+    # 从数据库读取配置
+    gemini_only_models = get_config("gemini_only_models") or []
+    amazonq_only_models = get_config("amazonq_only_models") or []
 
     # 如果是 Gemini 独占模型（以 gemini 开头或在独占列表中）
     if model.startswith('gemini') or model in gemini_only_models:
@@ -138,13 +224,6 @@ def get_random_channel_by_model(model: str) -> Optional[str]:
         if gemini_accounts:
             return 'gemini'
         return None
-
-    # Amazon Q 独占模型
-    amazonq_only_models = [
-        'claude-sonnet-4',  # 只有 Amazon Q 支持
-        'claude-sonnet-4.5',
-        'claude-haiku-4.5'
-    ]
 
     # 如果是 Amazon Q 独占模型
     if model in amazonq_only_models:
@@ -154,7 +233,6 @@ def get_random_channel_by_model(model: str) -> Optional[str]:
         return None
 
     # 对于其他模型（两个渠道都支持），按账号数量加权随机选择
-    # 注意：claude-sonnet-4.5 和 claude-sonnet-4-5 是同一个模型的不同叫法
     amazonq_accounts = list_enabled_accounts(account_type='amazonq')
     gemini_accounts = list_enabled_accounts(account_type='gemini')
 
