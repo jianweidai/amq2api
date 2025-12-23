@@ -99,6 +99,34 @@ def convert_claude_to_gemini(claude_req: ClaudeRequest, project: str) -> Dict[st
     for msg in claude_req.messages:
         role = "user" if msg.role == "user" else "model"
 
+        # 检测并修复只有 thinking 没有实质内容的 assistant 消息
+        if role == "model" and isinstance(msg.content, list):
+            has_thinking = False
+            has_text = False
+            for item in msg.content:
+                if isinstance(item, dict):
+                    if item.get("type") == "thinking":
+                        has_thinking = True
+                    elif item.get("type") == "text" and item.get("text", "").strip():
+                        has_text = True
+
+            # 如果只有 thinking 没有实质内容，添加提示文本
+            if has_thinking and not has_text:
+                logger.info("检测到只有 thinking 没有实质内容的 assistant 消息，添加提示文本")
+                msg.content.append({
+                    "type": "text",
+                    "text": "如果你想进入计划模式,那么不要进入计划模型！请使用TodoWrite tool来更新接下来的任务"
+                })
+
+        # 检测并替换 prompt suggestion 请求
+        if role == "user" and isinstance(msg.content, list):
+            for item in msg.content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    text = item.get("text", "")
+                    if "You are now a prompt suggestion generator" in text:
+                        logger.info("检测到 prompt suggestion 请求，替换为'继续任务'")
+                        item["text"] = "继续任务"
+
         # 处理 content
         if isinstance(msg.content, str):
             parts = [{"text": msg.content}]

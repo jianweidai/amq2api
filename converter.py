@@ -322,7 +322,7 @@ def convert_history_messages(messages: List[Any]) -> List[Dict[str, Any]]:
     history = []
     seen_tool_use_ids: set = set()  # 用于跟踪已添加的 toolUseId
 
-    for message in messages:
+    for idx, message in enumerate(messages):
         # 根据角色构建不同格式的历史条目
         if message.role == "user":
             # 处理用户消息（可能包含 tool_result 和 images）
