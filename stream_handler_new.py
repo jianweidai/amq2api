@@ -149,8 +149,7 @@ class AmazonQStreamHandler:
                 if not event:
                     # 检查是否是 toolUseEvent 的原始 payload
                     if event_type == 'toolUseEvent':
-                        logger.info(f"处理 toolUseEvent: {event_info.get('payload', {})}")
-                        # 直接处理 tool use 事件
+                        # 直接处理 tool use 事件（移除冗余日志）
                         async for cli_event in self._handle_tool_use_event(event_info.get('payload', {})):
                             yield cli_event
                     else:

@@ -90,12 +90,10 @@ def process_claude_history_for_amazonq(history: List[Dict[str, Any]]) -> List[Di
         if "userInputMessage" in msg:
             # 收集连续的用户消息
             pending_user_messages.append(msg["userInputMessage"])
-            logger.debug(f"[MESSAGE_PROCESSOR] 消息 {idx}: 收集 userInputMessage，当前待合并数量: {len(pending_user_messages)}")
 
         elif "assistantResponseMessage" in msg:
             # 遇到助手消息时，先合并之前的用户消息
             if pending_user_messages:
-                logger.info(f"[MESSAGE_PROCESSOR] 消息 {idx}: 合并 {len(pending_user_messages)} 条 userInputMessage")
                 merged_user_msg = merge_user_messages(pending_user_messages)
                 processed_history.append({
                     "userInputMessage": merged_user_msg
@@ -103,18 +101,14 @@ def process_claude_history_for_amazonq(history: List[Dict[str, Any]]) -> List[Di
                 pending_user_messages = []
 
             # 添加助手消息
-            logger.debug(f"[MESSAGE_PROCESSOR] 消息 {idx}: 添加 assistantResponseMessage")
             processed_history.append(msg)
 
     # 处理末尾剩余的用户消息
     if pending_user_messages:
-        logger.info(f"[MESSAGE_PROCESSOR] 处理末尾剩余的 {len(pending_user_messages)} 条 userInputMessage")
         merged_user_msg = merge_user_messages(pending_user_messages)
         processed_history.append({
             "userInputMessage": merged_user_msg
         })
-
-    logger.info(f"[MESSAGE_PROCESSOR] 历史记录处理完成，原始 {len(history)} 条 -> 处理后 {len(processed_history)} 条")
 
     # 验证消息交替
     try:
@@ -122,6 +116,10 @@ def process_claude_history_for_amazonq(history: List[Dict[str, Any]]) -> List[Di
     except ValueError as e:
         logger.error(f"[MESSAGE_PROCESSOR] 消息交替验证失败: {e}")
         raise
+
+    # 只在处理了消息时才记录（减少日志）
+    if len(history) != len(processed_history):
+        logger.debug(f"[MESSAGE_PROCESSOR] 历史记录处理完成，原始 {len(history)} 条 -> 处理后 {len(processed_history)} 条")
 
     return processed_history
 
@@ -162,7 +160,6 @@ def validate_message_alternation(history: List[Dict[str, Any]]) -> bool:
 
         last_role = current_role
 
-    logger.info("[MESSAGE_PROCESSOR] 消息交替验证通过")
     return True
 
 
