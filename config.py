@@ -47,8 +47,8 @@ class GlobalConfig:
 
     # Prompt Caching 模拟配置
     enable_cache_simulation: bool = False
-    cache_ttl_seconds: int = 300  # 默认 5 分钟
-    max_cache_entries: int = 1000  # 默认最大 1000 条缓存
+    cache_ttl_seconds: int = 86400  # 默认 24 小时
+    max_cache_entries: int = 5000  # 默认最大 5000 条缓存
 
     # Token 定时刷新配置
     enable_auto_refresh: bool = True  # 是否启用定时刷新
@@ -132,8 +132,8 @@ async def read_global_config() -> GlobalConfig:
                 zero_input_token_models=zero_token_models,
                 # Prompt Caching 模拟配置
                 enable_cache_simulation=os.getenv("ENABLE_CACHE_SIMULATION", "false").lower() == "true",
-                cache_ttl_seconds=int(os.getenv("CACHE_TTL_SECONDS", "300")),
-                max_cache_entries=int(os.getenv("MAX_CACHE_ENTRIES", "1000")),
+                cache_ttl_seconds=int(os.getenv("CACHE_TTL_SECONDS", "86400")),
+                max_cache_entries=int(os.getenv("MAX_CACHE_ENTRIES", "5000")),
                 # Token 定时刷新配置
                 enable_auto_refresh=os.getenv("ENABLE_AUTO_REFRESH", "true").lower() == "true",
                 token_refresh_interval_hours=int(os.getenv("TOKEN_REFRESH_INTERVAL_HOURS", "5"))

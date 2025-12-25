@@ -65,6 +65,18 @@ async def handle_custom_api_request(
     api_key = account.get("clientSecret", "")
     account_id = account.get("id")
     
+    # 应用模型映射（如果账号有配置）
+    from model_mapper import apply_model_mapping
+    original_model = claude_req.model
+    mapped_model = apply_model_mapping(account, original_model)
+    if mapped_model != original_model:
+        claude_req.model = mapped_model
+        # 更新 request_data 中的 model 字段（用于 Claude 格式透传）
+        request_data["model"] = mapped_model
+        # 如果是 OpenAI 格式，也需要更新 model 变量
+        if api_format == "openai":
+            model = mapped_model
+    
     logger.info(f"Custom API 请求: format={api_format}, provider={provider}, api_base={api_base}, model={model}")
     
     if api_format == "claude":
@@ -537,11 +549,16 @@ def _clean_claude_request_for_azure(request_data: Dict[str, Any]) -> Dict[str, A
             logger.debug(f"移除不支持的字段: {field}")
             del cleaned[field]
     
+    # 检查请求是否启用了 thinking
+    thinking_enabled = "thinking" in cleaned and cleaned.get("thinking", {}).get("type") == "enabled"
+    
     # 跟踪是否有缺少 signature 的 thinking 块被移除
     has_invalid_thinking = False
     
     # 清理 messages 字段：确保所有消息都有非空 content
-    # 对于 thinking 块：保留有 signature 的，移除没有的
+    # 对于 thinking 块的处理：
+    # - 如果 thinking 未启用：移除所有 thinking/redacted_thinking 块
+    # - 如果 thinking 已启用：保留有 signature 的，移除没有的
     if "messages" in cleaned and isinstance(cleaned["messages"], list):
         cleaned_messages = []
         for idx, msg in enumerate(cleaned["messages"]):
@@ -549,30 +566,41 @@ def _clean_claude_request_for_azure(request_data: Dict[str, Any]) -> Dict[str, A
                 content = msg.get("content")
                 role = msg.get("role", "")
                 
-                # 如果 content 是列表，需要清理其中缺少 signature 的 thinking 块
+                # 如果 content 是列表，需要清理 thinking 块
                 if isinstance(content, list):
                     cleaned_content = []
                     for block in content:
                         if isinstance(block, dict):
                             block_type = block.get("type")
-                            # 检查 thinking 块是否有 signature
+                            
+                            # 处理 thinking 块
                             if block_type == "thinking":
-                                if block.get("signature"):
-                                    # 有 signature，保留
+                                if not thinking_enabled:
+                                    # thinking 未启用，移除所有 thinking 块
+                                    logger.debug(f"移除消息 {idx} 中的 thinking 块（thinking 未启用）")
+                                    continue
+                                elif block.get("signature"):
+                                    # thinking 已启用且有 signature，保留
                                     cleaned_content.append(block)
                                 else:
-                                    # 没有 signature，移除
+                                    # thinking 已启用但缺少 signature，移除
                                     logger.debug(f"移除消息 {idx} 中缺少 signature 的 thinking 块")
                                     has_invalid_thinking = True
                                 continue
-                            # redacted_thinking 块也需要检查
+                            
+                            # 处理 redacted_thinking 块
                             if block_type == "redacted_thinking":
-                                if block.get("data"):
+                                if not thinking_enabled:
+                                    # thinking 未启用，移除
+                                    logger.debug(f"移除消息 {idx} 中的 redacted_thinking 块（thinking 未启用）")
+                                    continue
+                                elif block.get("data"):
                                     cleaned_content.append(block)
                                 else:
                                     logger.debug(f"移除消息 {idx} 中无效的 redacted_thinking 块")
                                     has_invalid_thinking = True
                                 continue
+                            
                             cleaned_content.append(block)
                         else:
                             cleaned_content.append(block)

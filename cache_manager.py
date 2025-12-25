@@ -9,6 +9,27 @@ from typing import Dict, Optional, Tuple, Any, List
 
 
 @dataclass
+class CacheStatistics:
+    """缓存统计信息"""
+    hit_count: int = 0          # 缓存命中次数
+    miss_count: int = 0         # 缓存未命中次数
+    eviction_count: int = 0     # 淘汰次数
+    
+    @property
+    def hit_rate(self) -> float:
+        """计算缓存命中率"""
+        total = self.hit_count + self.miss_count
+        if total == 0:
+            return 0.0
+        return self.hit_count / total
+    
+    @property
+    def total_requests(self) -> int:
+        """总请求数"""
+        return self.hit_count + self.miss_count
+
+
+@dataclass
 class CacheEntry:
     """缓存条目"""
     key: str                    # SHA-256 hash of cacheable content
@@ -31,17 +52,44 @@ class CacheManager:
     # Approximate characters per token (rough estimate for mixed content)
     CHARS_PER_TOKEN = 4
     
-    def __init__(self, ttl_seconds: int = 300, max_entries: int = 1000):
+    # 配置常量
+    MIN_TTL_SECONDS = 60           # 最小 TTL: 1 分钟
+    MAX_TTL_SECONDS = 604800       # 最大 TTL: 7 天
+    DEFAULT_TTL_SECONDS = 86400    # 默认 TTL: 24 小时 (was 300)
+    
+    MIN_MAX_ENTRIES = 100          # 最小缓存条目数
+    MAX_MAX_ENTRIES = 100000       # 最大缓存条目数
+    DEFAULT_MAX_ENTRIES = 5000     # 默认缓存条目数 (was 1000)
+    
+    BATCH_EVICTION_PERCENT = 10    # 批量淘汰百分比
+    
+    def __init__(self, ttl_seconds: int = DEFAULT_TTL_SECONDS, max_entries: int = DEFAULT_MAX_ENTRIES):
         """
         初始化缓存管理器
         
         Args:
-            ttl_seconds: 缓存条目的生存时间（秒），默认 300 秒（5 分钟）
-            max_entries: 最大缓存条目数，默认 1000
+            ttl_seconds: 缓存条目的生存时间（秒），默认 86400 秒（24 小时）
+            max_entries: 最大缓存条目数，默认 5000
+            
+        Raises:
+            ValueError: 如果参数超出有效范围
         """
+        # 验证并设置 TTL
+        if not self.MIN_TTL_SECONDS <= ttl_seconds <= self.MAX_TTL_SECONDS:
+            raise ValueError(
+                f"ttl_seconds must be between {self.MIN_TTL_SECONDS} and {self.MAX_TTL_SECONDS}"
+            )
+        
+        # 验证并设置 max_entries
+        if not self.MIN_MAX_ENTRIES <= max_entries <= self.MAX_MAX_ENTRIES:
+            raise ValueError(
+                f"max_entries must be between {self.MIN_MAX_ENTRIES} and {self.MAX_MAX_ENTRIES}"
+            )
+        
         self._cache: Dict[str, CacheEntry] = {}
         self._ttl = ttl_seconds
         self._max_entries = max_entries
+        self._stats = CacheStatistics()
     
     def calculate_cache_key(self, content: str) -> str:
         """
@@ -75,6 +123,7 @@ class CacheManager:
             # 缓存命中
             entry = self._cache[key]
             entry.last_accessed = now
+            self._stats.hit_count += 1
             return CacheResult(
                 is_hit=True,
                 cache_creation_input_tokens=0,
@@ -82,9 +131,10 @@ class CacheManager:
             )
         else:
             # 缓存未命中 - 创建新条目
-            # 先检查是否需要 LRU 淘汰
+            self._stats.miss_count += 1
+            # 先检查是否需要批量 LRU 淘汰
             if len(self._cache) >= self._max_entries:
-                self._evict_lru()
+                self._evict_lru_batch()
             
             self._cache[key] = CacheEntry(
                 key=key,
@@ -99,26 +149,88 @@ class CacheManager:
             )
     
     def _evict_expired(self) -> None:
-        """清理过期条目"""
+        """
+        清理过期条目（基于滑动窗口 TTL）
+        
+        使用 last_accessed + TTL 判断过期，而非 created_at + TTL
+        """
         now = datetime.now()
         expired_keys = [
             key for key, entry in self._cache.items()
-            if (now - entry.created_at).total_seconds() > self._ttl
+            if (now - entry.last_accessed).total_seconds() > self._ttl
         ]
         for key in expired_keys:
             del self._cache[key]
+            self._stats.eviction_count += 1
     
-    def _evict_lru(self) -> None:
-        """LRU 淘汰 - 移除最久未访问的条目"""
+    def _evict_lru_batch(self) -> None:
+        """
+        批量 LRU 淘汰
+        
+        淘汰 BATCH_EVICTION_PERCENT% 的条目，优先淘汰：
+        1. 最久未访问的条目
+        2. 在访问时间相近时，优先淘汰 token 数较少的条目
+        """
         if not self._cache:
             return
         
-        # 找到最久未访问的条目
-        oldest_key = min(
-            self._cache.keys(),
-            key=lambda k: self._cache[k].last_accessed
+        # 计算需要淘汰的数量
+        evict_count = max(1, len(self._cache) * self.BATCH_EVICTION_PERCENT // 100)
+        
+        # 按 (last_accessed, token_count) 排序，最旧且最小的优先淘汰
+        sorted_entries = sorted(
+            self._cache.items(),
+            key=lambda x: (x[1].last_accessed, x[1].token_count)
         )
-        del self._cache[oldest_key]
+        
+        # 淘汰前 evict_count 个条目
+        for key, _ in sorted_entries[:evict_count]:
+            del self._cache[key]
+            self._stats.eviction_count += 1
+    
+    def get_statistics(self) -> CacheStatistics:
+        """获取缓存统计信息"""
+        return self._stats
+    
+    def clear(self) -> None:
+        """清空缓存并重置统计"""
+        self._cache.clear()
+        self._stats = CacheStatistics()
+    
+    def prewarm(self, contents: List[str]) -> int:
+        """
+        预热缓存
+        
+        遍历内容列表，为每个创建缓存条目。使用 _estimate_token_count 估算 token 数。
+        尊重 max_entries 容量限制。
+        
+        Args:
+            contents: 要预热的内容列表
+            
+        Returns:
+            实际添加的条目数
+        """
+        added = 0
+        now = datetime.now()
+        
+        for content in contents:
+            # 检查是否已达到容量上限
+            if len(self._cache) >= self._max_entries:
+                break
+            
+            key = self.calculate_cache_key(content)
+            # 只添加不存在的条目
+            if key not in self._cache:
+                token_count = self._estimate_token_count(content)
+                self._cache[key] = CacheEntry(
+                    key=key,
+                    token_count=token_count,
+                    created_at=now,
+                    last_accessed=now
+                )
+                added += 1
+        
+        return added
     
     def _estimate_token_count(self, text: str) -> int:
         """
@@ -136,6 +248,21 @@ class CacheManager:
         if not text:
             return 0
         return max(1, len(text) // self.CHARS_PER_TOKEN)
+    
+    @property
+    def size(self) -> int:
+        """当前缓存条目数"""
+        return len(self._cache)
+    
+    @property
+    def ttl(self) -> int:
+        """当前 TTL 设置（秒）"""
+        return self._ttl
+    
+    @property
+    def max_entries(self) -> int:
+        """当前最大条目数设置"""
+        return self._max_entries
     
     def extract_cacheable_content(self, request_data: Dict[str, Any]) -> Tuple[str, int]:
         """

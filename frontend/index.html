@@ -511,6 +511,39 @@
       background: var(--accent);
       color: white;
     }
+
+    /* 模型映射样式 */
+    .mapping-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+
+    .mapping-row input {
+      flex: 1;
+      min-width: 150px;
+    }
+
+    .mapping-arrow {
+      color: var(--muted);
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+
+    .mapping-delete {
+      background: var(--danger);
+      padding: 8px 12px;
+      font-size: 12px;
+      flex-shrink: 0;
+    }
+
+    .mapping-delete:hover {
+      background: #ff453a;
+    }
   </style>
 </head>
 
@@ -646,6 +679,28 @@
             </div>
           </div>
         </div>
+        
+        <!-- 模型映射配置区域 -->
+        <div id="model_mapping_section" style="margin-top:20px">
+          <h3>🔄 模型映射（可选）</h3>
+          <p style="color: var(--muted); font-size: 13px; margin-bottom: 12px;">
+            配置模型映射关系。左侧是客户端请求的模型，右侧是实际发送给API的模型。
+          </p>
+          
+          <!-- 快捷添加按钮 -->
+          <div class="row" style="margin-bottom:12px">
+            <button type="button" class="btn-secondary" onclick="addQuickMapping('claude-sonnet-4-5-20250929', 'claude-sonnet-4-5')">+ Sonnet 4.5</button>
+            <button type="button" class="btn-secondary" onclick="addQuickMapping('claude-haiku-4-5-20251001', 'claude-haiku-4-5')">+ Haiku 4.5</button>
+            <button type="button" class="btn-secondary" onclick="addQuickMapping('claude-opus-4-5-20251101', 'claude-opus-4-5')">+ Opus 4.5</button>
+          </div>
+          
+          <!-- 映射列表容器 -->
+          <div id="mapping_list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"></div>
+          
+          <!-- 添加映射按钮 -->
+          <button type="button" class="btn-secondary" onclick="addMappingRow()">➕ 添加模型映射</button>
+        </div>
+        
         <div class="row" style="margin-top:12px;align-items:center">
           <label class="switch">
             <input id="new_enabled" type="checkbox" checked />
@@ -805,6 +860,173 @@
         textarea.placeholder = 'amazonq|我的账号|client_id|client_secret|refresh_token|access_token||';
       }
     }
+
+    // ============== 模型映射管理函数 ==============
+    
+    // 存储当前的映射列表
+    let currentMappings = [];
+
+    function renderMappingList(mappings) {
+      const container = document.getElementById('mapping_list');
+      container.innerHTML = '';
+      
+      if (!mappings || mappings.length === 0) {
+        return;
+      }
+      
+      mappings.forEach((mapping, index) => {
+        const row = document.createElement('div');
+        row.className = 'mapping-row';
+        
+        const requestInput = document.createElement('input');
+        requestInput.type = 'text';
+        requestInput.placeholder = '请求模型（如 claude-sonnet-4-5-20250929）';
+        requestInput.value = mapping.requestModel || '';
+        requestInput.oninput = () => {
+          currentMappings[index].requestModel = requestInput.value.trim();
+        };
+        
+        const arrow = document.createElement('span');
+        arrow.className = 'mapping-arrow';
+        arrow.textContent = '→';
+        
+        const targetInput = document.createElement('input');
+        targetInput.type = 'text';
+        targetInput.placeholder = '目标模型（如 claude-sonnet-4-5）';
+        targetInput.value = mapping.targetModel || '';
+        targetInput.oninput = () => {
+          currentMappings[index].targetModel = targetInput.value.trim();
+        };
+        
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'mapping-delete';
+        deleteBtn.textContent = '🗑️ 删除';
+        deleteBtn.onclick = () => removeMappingRow(index);
+        
+        row.appendChild(requestInput);
+        row.appendChild(arrow);
+        row.appendChild(targetInput);
+        row.appendChild(deleteBtn);
+        
+        container.appendChild(row);
+      });
+    }
+
+    function addMappingRow() {
+      currentMappings.push({ requestModel: '', targetModel: '' });
+      // Check if we're in edit modal or create form
+      const editContainer = document.getElementById('edit_mapping_list');
+      if (editContainer) {
+        renderEditMappingList();
+      } else {
+        renderMappingList(currentMappings);
+      }
+    }
+
+    function addQuickMapping(requestModel, targetModel) {
+      // 检查是否已存在相同的请求模型
+      const exists = currentMappings.some(m => m.requestModel === requestModel);
+      if (exists) {
+        alert(`映射 "${requestModel}" 已存在`);
+        return;
+      }
+      
+      currentMappings.push({ requestModel, targetModel });
+      // Check if we're in edit modal or create form
+      const editContainer = document.getElementById('edit_mapping_list');
+      if (editContainer) {
+        renderEditMappingList();
+      } else {
+        renderMappingList(currentMappings);
+      }
+    }
+
+    function removeMappingRow(index) {
+      currentMappings.splice(index, 1);
+      renderMappingList(currentMappings);
+    }
+
+    function getMappingsFromUI() {
+      // Filter out empty mappings
+      return currentMappings.filter(m => 
+        m.requestModel && m.requestModel.trim() !== '' && 
+        m.targetModel && m.targetModel.trim() !== ''
+      );
+    }
+
+    function validateMappings(mappings) {
+      if (!mappings || mappings.length === 0) {
+        return { valid: true, error: null };
+      }
+      
+      // Check for duplicate request models
+      const requestModels = mappings.map(m => m.requestModel);
+      const duplicates = requestModels.filter((item, index) => requestModels.indexOf(item) !== index);
+      
+      if (duplicates.length > 0) {
+        return { 
+          valid: false, 
+          error: `检测到重复的请求模型: ${duplicates.join(', ')}` 
+        };
+      }
+      
+      return { valid: true, error: null };
+    }
+
+    function renderEditMappingList() {
+      const container = document.getElementById('edit_mapping_list');
+      if (!container) return;
+      
+      container.innerHTML = '';
+      
+      if (!currentMappings || currentMappings.length === 0) {
+        return;
+      }
+      
+      currentMappings.forEach((mapping, index) => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px';
+        
+        const requestInput = document.createElement('input');
+        requestInput.type = 'text';
+        requestInput.placeholder = '请求模型';
+        requestInput.value = mapping.requestModel || '';
+        requestInput.style.cssText = 'flex:1;min-width:120px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px';
+        requestInput.oninput = () => {
+          currentMappings[index].requestModel = requestInput.value.trim();
+        };
+        
+        const arrow = document.createElement('span');
+        arrow.textContent = '→';
+        arrow.style.cssText = 'color:var(--muted);font-size:14px;flex-shrink:0';
+        
+        const targetInput = document.createElement('input');
+        targetInput.type = 'text';
+        targetInput.placeholder = '目标模型';
+        targetInput.value = mapping.targetModel || '';
+        targetInput.style.cssText = 'flex:1;min-width:120px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px';
+        targetInput.oninput = () => {
+          currentMappings[index].targetModel = targetInput.value.trim();
+        };
+        
+        const deleteBtn = document.createElement('button');
+        deleteBtn.textContent = '🗑️';
+        deleteBtn.style.cssText = 'padding:6px 10px;border-radius:6px;border:none;background:var(--danger);color:white;cursor:pointer;font-size:12px;flex-shrink:0';
+        deleteBtn.onclick = () => {
+          currentMappings.splice(index, 1);
+          renderEditMappingList();
+        };
+        
+        row.appendChild(requestInput);
+        row.appendChild(arrow);
+        row.appendChild(targetInput);
+        row.appendChild(deleteBtn);
+        
+        container.appendChild(row);
+      });
+    }
+
+    // ============== 结束模型映射管理函数 ==============
 
     function setHealth(text, ok = true) {
       const el = document.getElementById('health');
@@ -1105,6 +1327,19 @@
         if (provider) other.provider = provider;
       }
 
+      // Collect and validate model mappings
+      const mappings = getMappingsFromUI();
+      const validation = validateMappings(mappings);
+      if (!validation.valid) {
+        alert(validation.error);
+        return;
+      }
+      
+      // Add mappings to other field if present
+      if (mappings.length > 0) {
+        other.modelMappings = mappings;
+      }
+
       const weightVal = parseInt(document.getElementById('new_weight').value) || 50;
       const body = {
         type,
@@ -1138,6 +1373,9 @@
         document.getElementById('new_model').value = '';
         document.getElementById('new_format').value = 'openai';
         document.getElementById('new_weight').value = '50';
+        // 清空模型映射
+        currentMappings = [];
+        renderMappingList(currentMappings);
       } catch (e) {
         alert('创建失败：' + e);
       }
@@ -1180,6 +1418,10 @@
 
     async function editAccount(acc) {
       const other = acc.other || {};
+      
+      // Load existing mappings into currentMappings for editing
+      currentMappings = other.modelMappings ? JSON.parse(JSON.stringify(other.modelMappings)) : [];
+      
       let html = '<div style="padding:20px;max-height:70vh;overflow-y:auto">';
       html += '<h3 style="margin-top:0">编辑账号</h3>';
       html += '<div style="display:flex;flex-direction:column;gap:12px">';
@@ -1203,6 +1445,20 @@
           html += `<div><label style="display:block;margin-bottom:4px;color:var(--muted);font-size:13px">API Endpoint</label><input id="edit_api_endpoint" value="${other.api_endpoint || ''}" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></div>`;
         }
       }
+      
+      // Add model mapping section to edit modal
+      html += '<div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">';
+      html += '<h4 style="margin:0 0 8px 0;font-size:15px">🔄 模型映射（可选）</h4>';
+      html += '<p style="color:var(--muted);font-size:12px;margin-bottom:12px">配置模型映射关系。左侧是客户端请求的模型，右侧是实际发送给API的模型。</p>';
+      html += '<div style="display:flex;gap:8px;margin-bottom:12px">';
+      html += '<button type="button" onclick="addQuickMapping(\'claude-sonnet-4-5-20250929\', \'claude-sonnet-4-5\')" style="padding:6px 12px;border-radius:8px;border:none;background:var(--muted);color:white;cursor:pointer;font-size:12px">+ Sonnet 4.5</button>';
+      html += '<button type="button" onclick="addQuickMapping(\'claude-haiku-4-5-20251001\', \'claude-haiku-4-5\')" style="padding:6px 12px;border-radius:8px;border:none;background:var(--muted);color:white;cursor:pointer;font-size:12px">+ Haiku 4.5</button>';
+      html += '<button type="button" onclick="addQuickMapping(\'claude-opus-4-5-20251101\', \'claude-opus-4-5\')" style="padding:6px 12px;border-radius:8px;border:none;background:var(--muted);color:white;cursor:pointer;font-size:12px">+ Opus 4.5</button>';
+      html += '</div>';
+      html += '<div id="edit_mapping_list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"></div>';
+      html += '<button type="button" onclick="addMappingRow()" style="padding:6px 12px;border-radius:8px;border:none;background:var(--muted);color:white;cursor:pointer;font-size:12px">➕ 添加模型映射</button>';
+      html += '</div>';
+      
       html += '</div></div>';
 
       const modal = document.createElement('div');
@@ -1210,9 +1466,20 @@
       modal.innerHTML = `<div style="background:var(--panel);border-radius:16px;max-width:500px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.3)">${html}<div style="padding:16px;display:flex;gap:8px;justify-content:flex-end;border-top:1px solid var(--border)"><button onclick="this.closest('div[style*=fixed]').remove()" style="padding:8px 16px;border-radius:8px;border:none;background:var(--muted);color:white;cursor:pointer">取消</button><button id="save_edit" style="padding:8px 16px;border-radius:8px;border:none;background:var(--accent);color:white;cursor:pointer">保存</button></div></div>`;
       document.body.appendChild(modal);
       modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+      
+      // Render existing mappings in the edit modal
+      renderEditMappingList();
 
       document.getElementById('save_edit').onclick = async () => {
         try {
+          // Collect and validate model mappings
+          const mappings = getMappingsFromUI();
+          const validation = validateMappings(mappings);
+          if (!validation.valid) {
+            alert(validation.error);
+            return;
+          }
+          
           const weightVal = parseInt(document.getElementById('edit_weight').value) || 50;
           const patch = {
             label: document.getElementById('edit_label').value.trim() || null,
@@ -1239,6 +1506,14 @@
             newOther.model = model;
             newOther.format = format;
             newOther.provider = document.getElementById('edit_provider').value;
+            
+            // Add or remove model mappings
+            if (mappings.length > 0) {
+              newOther.modelMappings = mappings;
+            } else {
+              delete newOther.modelMappings;
+            }
+            
             patch.other = newOther;
           } else {
             patch.clientId = document.getElementById('edit_clientId').value.trim();
@@ -1261,7 +1536,25 @@
                 delete newOther.api_endpoint;
               }
 
+              // Add or remove model mappings
+              if (mappings.length > 0) {
+                newOther.modelMappings = mappings;
+              } else {
+                delete newOther.modelMappings;
+              }
+
               patch.other = newOther;
+            } else {
+              // For amazonq accounts, handle mappings in other field
+              if (mappings.length > 0 || (other && other.modelMappings)) {
+                const newOther = { ...other };
+                if (mappings.length > 0) {
+                  newOther.modelMappings = mappings;
+                } else {
+                  delete newOther.modelMappings;
+                }
+                patch.other = newOther;
+              }
             }
           }
 

@@ -385,6 +385,56 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
             logger.error(f"Token 刷新失败: {e}")
             raise HTTPException(status_code=502, detail="Token 刷新失败")
 
+        # 应用模型映射（如果账号有配置）
+        if account:
+            from model_mapper import apply_model_mapping
+            original_model = model
+            model = apply_model_mapping(account, model)
+            if model != original_model:
+                # 更新 claude_req 中的模型
+                claude_req.model = model
+                # 重新转换请求
+                codewhisperer_req = convert_claude_to_codewhisperer_request(
+                    claude_req,
+                    conversation_id=None,
+                    profile_arn=config.profile_arn
+                )
+                codewhisperer_dict = codewhisperer_request_to_dict(codewhisperer_req)
+                # 重新处理历史记录和 toolResults
+                conversation_state = codewhisperer_dict.get("conversationState", {})
+                history = conversation_state.get("history", [])
+                if history:
+                    processed_history = process_claude_history_for_amazonq(history)
+                    conversation_state["history"] = processed_history
+                    codewhisperer_dict["conversationState"] = conversation_state
+                
+                conversation_state = codewhisperer_dict.get("conversationState", {})
+                current_message = conversation_state.get("currentMessage", {})
+                user_input_message = current_message.get("userInputMessage", {})
+                user_input_message_context = user_input_message.get("userInputMessageContext", {})
+                tool_results = user_input_message_context.get("toolResults", [])
+                if tool_results:
+                    merged_tool_results = []
+                    seen_tool_use_ids = set()
+                    for result in tool_results:
+                        tool_use_id = result.get("toolUseId")
+                        if tool_use_id in seen_tool_use_ids:
+                            for existing in merged_tool_results:
+                                if existing.get("toolUseId") == tool_use_id:
+                                    existing["content"].extend(result.get("content", []))
+                                    break
+                        else:
+                            seen_tool_use_ids.add(tool_use_id)
+                            merged_tool_results.append(result)
+                    user_input_message_context["toolResults"] = merged_tool_results
+                    user_input_message["userInputMessageContext"] = user_input_message_context
+                    current_message["userInputMessage"] = user_input_message
+                    conversation_state["currentMessage"] = current_message
+                    codewhisperer_dict["conversationState"] = conversation_state
+                
+                final_request = codewhisperer_dict
+
+
         # 构建 Amazon Q 特定的请求头（完整版本）
         import uuid
         auth_headers = {
@@ -697,6 +747,14 @@ async def create_gemini_message(request: Request, _: bool = Depends(verify_api_k
             other["token_expires_at"] = token_manager.token_expires_at.isoformat() if token_manager.token_expires_at else None
             update_account(account["id"], access_token=token_manager.access_token, other=other)
             logger.info(f"Gemini access token 已更新到数据库")
+
+        # 应用模型映射（如果账号有配置）
+        from model_mapper import apply_model_mapping
+        original_model = claude_req.model
+        mapped_model = apply_model_mapping(account, original_model)
+        if mapped_model != original_model:
+            claude_req.model = mapped_model
+
 
         # 转换为 Gemini 请求
         gemini_request = convert_claude_to_gemini(
