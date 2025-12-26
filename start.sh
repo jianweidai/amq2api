@@ -43,4 +43,4 @@ pip install -r requirements.txt
 echo "=========================================="
 echo "启动服务..."
 echo "=========================================="
-python3 main.py
+python3 run.py

@@ -19,32 +19,42 @@
 
 ### 请求流程
 ```
-Claude API 请求 → main.py → converter.py → Amazon Q API
+Claude API 请求 → src/main.py → src/amazonq/converter.py → Amazon Q API
                      ↓
-                 auth.py (Token 管理)
+                 src/auth/auth.py (Token 管理)
                      ↓
-Amazon Q Event Stream → event_stream_parser.py → parser.py → stream_handler_new.py → Claude SSE 响应
+Amazon Q Event Stream → src/amazonq/event_stream_parser.py → src/amazonq/parser.py → src/amazonq/stream_handler.py → Claude SSE 响应
 ```
 
 ### 核心模块
 
-- **main.py** - FastAPI 服务器,处理 `/v1/messages` 和管理 API 端点
-- **account_manager.py** - 多账号管理（SQLite 数据库）
-- **auth.py** - Amazon Q Token 自动刷新机制（JWT 过期检测）
-- **converter.py** - 请求格式转换 (Claude → Amazon Q)
-- **event_stream_parser.py** - 解析 AWS Event Stream 二进制格式
-- **parser.py** - 事件类型转换 (Amazon Q → Claude)
-- **stream_handler_new.py** - 流式响应处理和事件生成
-- **message_processor.py** - 历史消息合并,确保 user-assistant 交替
-- **config.py** - 配置管理和 Token 缓存
-- **models.py** - 数据结构定义
+- **src/main.py** - FastAPI 服务器,处理 `/v1/messages` 和管理 API 端点
+- **src/auth/** - 认证模块
+  - **auth.py** - Amazon Q Token 自动刷新机制（JWT 过期检测）
+  - **account_manager.py** - 多账号管理（SQLite/MySQL 数据库）
+  - **token_scheduler.py** - 定时 Token 刷新
+- **src/amazonq/** - Amazon Q 后端模块
+  - **converter.py** - 请求格式转换 (Claude → Amazon Q)
+  - **event_stream_parser.py** - 解析 AWS Event Stream 二进制格式
+  - **parser.py** - 事件类型转换 (Amazon Q → Claude)
+  - **stream_handler.py** - 流式响应处理和事件生成
+- **src/processing/** - 通用处理模块
+  - **message_processor.py** - 历史消息合并,确保 user-assistant 交替
+  - **model_mapper.py** - 模型名称映射
+  - **cache_manager.py** - Prompt Caching 模拟
+  - **usage_tracker.py** - Token 使用量追踪
+- **src/config.py** - 配置管理和 Token 缓存
+- **src/models.py** - 数据结构定义
 - **frontend/index.html** - Web 管理界面
-- **gemini/** - Gemini 模块
+- **src/gemini/** - Gemini 模块
   - **auth.py** - Gemini Token 管理
   - **converter.py** - 请求格式转换 (Claude → Gemini)
   - **handler.py** - Gemini 流式响应处理
   - **models.py** - Gemini 数据模型
-- **gemini_oauth_client.py** - Gemini OAuth 凭证获取工具（独立脚本）
+  - **oauth_client.py** - Gemini OAuth 凭证获取工具
+- **src/custom_api/** - Custom API 模块
+  - **converter.py** - 格式转换 (Claude ↔ OpenAI)
+  - **handler.py** - Custom API 请求处理
 
 ## 快速开始
 
@@ -446,33 +456,54 @@ Claude Code 客户端
 
 ```
 amq2api/
-├── .env.example              # 环境变量模板
-├── .gitignore               # Git 忽略文件
-├── README.md                # 使用说明
-├── DOCKER_DEPLOY.md         # Docker 部署文档
-├── Dockerfile               # Docker 镜像构建
-├── docker-compose.yml       # Docker Compose 配置
-├── requirements.txt         # Python 依赖
-├── start.sh                # 启动脚本
-├── config.py               # 配置管理
-├── auth.py                 # Amazon Q 认证模块
-├── account_manager.py      # 多账号管理
-├── models.py               # 数据结构
-├── converter.py            # Amazon Q 请求转换
-├── parser.py               # Amazon Q 事件解析
-├── event_stream_parser.py  # AWS Event Stream 解析
-├── stream_handler_new.py   # Amazon Q 流处理
-├── message_processor.py    # 消息处理
-├── main.py                 # 主服务
-├── frontend/
-│   └── index.html         # Web 管理界面
-├── gemini/                 # Gemini 模块
-│   ├── __init__.py
-│   ├── auth.py            # Gemini Token 管理
-│   ├── converter.py       # Gemini 请求转换
-│   ├── handler.py         # Gemini 流处理
-│   └── models.py          # Gemini 数据模型
-└── gemini_oauth_client.py  # Gemini OAuth 凭证获取工具
+├── run.py                    # 入口脚本
+├── pyproject.toml            # Python 项目配置
+├── requirements.txt          # Python 依赖
+├── Dockerfile                # Docker 镜像构建
+├── docker-compose.yml        # Docker Compose 配置
+├── start.sh                  # 启动脚本
+│
+├── src/                      # 源代码目录
+│   ├── main.py              # FastAPI 主服务
+│   ├── config.py            # 配置管理
+│   ├── models.py            # 数据结构定义
+│   │
+│   ├── data/                # 数据库文件
+│   │   └── accounts.db      # SQLite 数据库
+│   │
+│   ├── auth/                # 认证模块
+│   │   ├── auth.py         # Amazon Q Token 管理
+│   │   ├── account_manager.py # 多账号管理
+│   │   └── token_scheduler.py # 定时刷新
+│   │
+│   ├── amazonq/             # Amazon Q 后端模块
+│   │   ├── converter.py    # 请求转换
+│   │   ├── parser.py       # 事件解析
+│   │   ├── event_stream_parser.py # AWS Event Stream 解析
+│   │   └── stream_handler.py # 流处理
+│   │
+│   ├── processing/          # 通用处理模块
+│   │   ├── message_processor.py # 消息处理
+│   │   ├── model_mapper.py # 模型映射
+│   │   ├── cache_manager.py # 缓存管理
+│   │   └── usage_tracker.py # 使用量追踪
+│   │
+│   ├── gemini/              # Gemini 后端模块
+│   │   ├── auth.py         # Gemini Token 管理
+│   │   ├── converter.py    # 请求转换
+│   │   ├── handler.py      # 流处理
+│   │   ├── models.py       # 数据模型
+│   │   └── oauth_client.py # OAuth 客户端
+│   │
+│   └── custom_api/          # Custom API 后端模块
+│       ├── converter.py    # 格式转换
+│       └── handler.py      # 请求处理
+│
+├── tests/                    # 测试文件
+├── docs/                     # 文档
+└── frontend/                 # Web 管理界面
+    ├── index.html           # 管理页面
+    └── donate.html          # Gemini 投喂站
 ```
 
 ### 扩展功能

@@ -16,10 +16,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制应用代码
-COPY *.py .
+COPY run.py .
+COPY src/ ./src/
 COPY frontend/ ./frontend/
-COPY gemini/ ./gemini/
-COPY custom_api/ ./custom_api/
 
 # 创建数据目录和非 root 用户
 RUN mkdir -p /app/data && \
@@ -35,4 +34,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"
 
 # 启动应用
-CMD ["python", "main.py"]
+CMD ["python", "run.py"]

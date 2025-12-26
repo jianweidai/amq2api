@@ -1,4 +1,0 @@
-# file: /Users/jianweidai/Documents/vsproject/amq2api/cache_manager.py
-# hypothesis_version: 6.148.7
-
-[300, 1000, 'cache_control', 'content', 'ephemeral', 'image', 'input', 'messages', 'name', 'source', 'system', 'text', 'tool_result', 'tool_use', 'tool_use_id', 'type', 'utf-8']

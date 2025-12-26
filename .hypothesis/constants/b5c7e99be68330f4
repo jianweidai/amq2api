@@ -1,4 +1,0 @@
-# file: /Users/jianweidai/Documents/vsproject/amq2api/models.py
-# hypothesis_version: 6.148.7
-
-[4096, 10100, 10240, '/', 'CLI', 'MANUAL', 'assistant', 'base64', 'bytes', 'claude-sonnet-4.5', 'content_block_delta', 'content_block_start', 'content_block_stop', 'data', 'format', 'image', 'image/png', 'json', 'media_type', 'message_start', 'message_stop', 'png', 'source', 'text', 'type', 'user']

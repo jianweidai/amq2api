@@ -18,7 +18,7 @@ Claude API 原生支持 `thinking` 参数来启用扩展思考模式，但 OpenA
 
 #### 阶段 1：请求转换（注入思考提示）
 
-在 `custom_api/converter.py` 中定义思考提示词：
+在 `src/custom_api/converter.py` 中定义思考提示词：
 
 ```python
 THINKING_HINT = """
@@ -91,9 +91,9 @@ class OpenAIStreamState:
 
 ### 实现位置
 
-- `main.py`: `create_custom_api_message` 端点中的缓存提取逻辑
-- `custom_api/handler.py`: 传递缓存参数
-- `custom_api/converter.py`: 在 SSE 事件中包含缓存统计
+- `src/main.py`: `create_custom_api_message` 端点中的缓存提取逻辑
+- `src/custom_api/handler.py`: 传递缓存参数
+- `src/custom_api/converter.py`: 在 SSE 事件中包含缓存统计
 
 ### 工作原理
 
@@ -113,13 +113,13 @@ self.cache_read_input_tokens = 0
 
 ### 实现位置
 
-- `custom_api/handler.py`: `handle_openai_format_stream` 和 `handle_claude_format_stream`
-- `usage_tracker.py`: 统一的 token 记录模块
+- `src/custom_api/handler.py`: `handle_openai_format_stream` 和 `handle_claude_format_stream`
+- `src/processing/usage_tracker.py`: 统一的 token 记录模块
 
 ### 记录方式
 
 ```python
-from usage_tracker import record_token_usage
+from src.processing.usage_tracker import record_token_usage
 
 # 在流结束时记录
 record_token_usage(
@@ -137,7 +137,7 @@ record_token_usage(
 
 ### API Base URL 自动补全
 
-在 `custom_api/handler.py` 中，自动为 API Base URL 添加 `/v1` 前缀：
+在 `src/custom_api/handler.py` 中，自动为 API Base URL 添加 `/v1` 前缀：
 
 ```python
 if not api_base.rstrip('/').endswith('/v1'):
@@ -146,7 +146,7 @@ if not api_base.rstrip('/').endswith('/v1'):
 
 ### 遥测端点
 
-在 `main.py` 中添加静默端点处理 Claude Code 遥测请求：
+在 `src/main.py` 中添加静默端点处理 Claude Code 遥测请求：
 
 ```python
 @app.post("/api/event_logging/batch")
@@ -172,10 +172,10 @@ ZERO_INPUT_TOKEN_MODELS=
 
 | 文件 | 说明 |
 |------|------|
-| `custom_api/converter.py` | 请求/响应转换，thinking 模式核心实现 |
-| `custom_api/handler.py` | 请求处理，token 统计，缓存参数传递 |
-| `main.py` | API 端点，缓存模拟逻辑 |
-| `usage_tracker.py` | Token 使用记录 |
+| `src/custom_api/converter.py` | 请求/响应转换，thinking 模式核心实现 |
+| `src/custom_api/handler.py` | 请求处理，token 统计，缓存参数传递 |
+| `src/main.py` | API 端点，缓存模拟逻辑 |
+| `src/processing/usage_tracker.py` | Token 使用记录 |
 | `.env.example` | 配置示例 |
 
 ---

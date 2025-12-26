@@ -25,16 +25,16 @@ URL 登录功能允许用户通过 AWS OIDC 设备授权流程（Device Authoriz
 
 | 文件 | 作用 |
 |------|------|
-| `auth_flow.py` | OIDC 认证核心逻辑（客户端注册、设备授权、token 轮询） |
-| `app.py` | API 端点定义和业务逻辑 |
-| `db.py` | 数据库操作抽象层 |
+| `src/auth/auth.py` | OIDC 认证核心逻辑（客户端注册、设备授权、token 轮询） |
+| `src/main.py` | API 端点定义和业务逻辑 |
+| `src/auth/account_manager.py` | 数据库操作抽象层 |
 | `frontend/index.html` | 前端 UI（URL登录 Tab） |
 
 ---
 
 ## 详细实现
 
-### 1. auth_flow.py - OIDC 认证核心
+### 1. src/auth/auth.py - OIDC 认证核心
 
 这是整个功能的核心模块，包含与 AWS OIDC 服务交互的所有逻辑。
 
@@ -168,7 +168,7 @@ async def poll_token_device_code(
 
 ---
 
-### 2. app.py - API 端点实现
+### 2. src/main.py - API 端点实现
 
 #### 2.1 数据结构定义
 
@@ -505,7 +505,7 @@ aiosqlite>=0.19.0  # 或其他数据库驱动
 ### 移植步骤
 
 1. **复制核心文件**
-   - `auth_flow.py` - OIDC 认证逻辑（可直接使用）
+   - `src/auth/auth.py` - OIDC 认证逻辑（可直接使用）
    
 2. **集成到你的 FastAPI 应用**
    - 导入 auth_flow 模块中的三个函数
@@ -523,7 +523,7 @@ aiosqlite>=0.19.0  # 或其他数据库驱动
 
 2. **超时设置**: 默认 5 分钟超时，可通过 `max_timeout_sec` 参数调整。
 
-3. **代理支持**: `auth_flow.py` 支持通过 `HTTP_PROXY` 环境变量配置代理。
+3. **代理支持**: `src/auth/auth.py` 支持通过 `HTTP_PROXY` 环境变量配置代理。
 
 4. **错误处理**: 需要处理网络错误、超时、用户取消等情况。
 

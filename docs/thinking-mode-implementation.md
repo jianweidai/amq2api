@@ -57,8 +57,8 @@ main.py (智能路由)
 
 #### 实现位置
 
-- **提示词注入**: `converter.py` - `convert_claude_to_codewhisperer_request()`
-- **标签解析**: `stream_handler_new.py` - `AmazonQStreamHandler.handle_stream()`
+- **提示词注入**: `src/amazonq/converter.py` - `convert_claude_to_codewhisperer_request()`
+- **标签解析**: `src/amazonq/stream_handler.py` - `AmazonQStreamHandler.handle_stream()`
 
 #### 核心逻辑
 
@@ -67,7 +67,7 @@ main.py (智能路由)
 Amazon Q 使用与 Custom API (OpenAI) 相同的策略：在用户消息末尾注入 thinking 提示词。
 
 ```python
-# converter.py
+# src/amazonq/converter.py
 
 THINKING_HINT = "<thinking_mode>interleaved</thinking_mode><max_thinking_length>16000</max_thinking_length><thinking_mode>interleaved</thinking_mode><max_thinking_length>16000</max_thinking_length>"
 
@@ -109,7 +109,7 @@ def convert_claude_to_codewhisperer_request(claude_req: ClaudeRequest, ...):
 ##### 1.2 历史消息转换
 
 ```python
-# converter.py - 处理历史消息中的 thinking 块
+# src/amazonq/converter.py - 处理历史消息中的 thinking 块
 
 for block in content:
     if block.get("type") == "thinking":
@@ -119,7 +119,7 @@ for block in content:
 
 ##### 1.3 响应流解析
 
-`stream_handler_new.py` 中的 `AmazonQStreamHandler` 实时解析 Amazon Q 返回的文本流，检测 `<thinking>` 标签：
+`src/amazonq/stream_handler.py` 中的 `AmazonQStreamHandler` 实时解析 Amazon Q 返回的文本流，检测 `<thinking>` 标签：
 
 ```python
 class AmazonQStreamHandler:
@@ -270,9 +270,9 @@ if thinking_param is not None:
 
 #### 实现位置
 
-- **配置生成**: `gemini/converter.py` - `get_thinking_config()`
-- **请求转换**: `gemini/converter.py` - `convert_claude_to_gemini()`
-- **响应处理**: `gemini/handler.py` - `handle_gemini_stream()`
+- **配置生成**: `src/gemini/converter.py` - `get_thinking_config()`
+- **请求转换**: `src/gemini/converter.py` - `convert_claude_to_gemini()`
+- **响应处理**: `src/gemini/handler.py` - `handle_gemini_stream()`
 
 #### 核心逻辑
 
@@ -374,9 +374,9 @@ def reorganize_tool_messages(contents: List[Dict[str, Any]]) -> List[Dict[str, A
 
 ##### 实现位置
 
-- **请求转换**: `custom_api/converter.py` - `convert_claude_to_openai_request()`
-- **响应解析**: `custom_api/converter.py` - `_process_thinking_content()`
-- **流处理**: `custom_api/converter.py` - `OpenAIStreamState`
+- **请求转换**: `src/custom_api/converter.py` - `convert_claude_to_openai_request()`
+- **响应解析**: `src/custom_api/converter.py` - `_process_thinking_content()`
+- **流处理**: `src/custom_api/converter.py` - `OpenAIStreamState`
 
 ##### 三阶段转换
 
@@ -482,7 +482,7 @@ def _is_thinking_enabled(claude_req: ClaudeRequest) -> bool:
 
 ##### 实现位置
 
-- **透传处理**: `custom_api/handler.py` - `handle_claude_format_stream()`
+- **透传处理**: `src/custom_api/handler.py` - `handle_claude_format_stream()`
 
 ##### 核心逻辑
 
@@ -528,7 +528,7 @@ async def handle_claude_format_stream(
 
 ##### 实现位置
 
-- **清理逻辑**: `custom_api/handler.py` - `_clean_claude_request_for_azure()`
+- **清理逻辑**: `src/custom_api/handler.py` - `_clean_claude_request_for_azure()`
 
 ##### 核心逻辑
 
@@ -742,7 +742,7 @@ Azure API 正常处理
 Thinking 块可以被缓存：
 
 ```python
-# 在 main.py 中
+# 在 src/main.py 中
 if _cache_manager is not None:
     cacheable_content, token_count = _cache_manager.extract_cacheable_content(request_data)
     # thinking 块会被包含在 cacheable_content 中
@@ -958,14 +958,14 @@ curl -X POST http://localhost:8080/v1/custom_api/messages \
 
 | 文件 | 说明 |
 |------|------|
-| `models.py` | 定义 `ClaudeRequest.thinking` 参数 |
-| `gemini/converter.py` | Gemini thinking 配置生成和 signature 处理 |
-| `gemini/handler.py` | Gemini 响应流处理，signature_delta 事件 |
-| `custom_api/converter.py` | OpenAI 格式 thinking 转换（提示词注入 + 流解析） |
-| `custom_api/handler.py` | Claude 格式透传和 Azure 清理逻辑 |
-| `account_manager.py` | Gemini thinking 模型路由 |
-| `main.py` | API 端点和智能路由逻辑 |
-| `cache_manager.py` | Thinking 块缓存支持 |
+| `src/models.py` | 定义 `ClaudeRequest.thinking` 参数 |
+| `src/gemini/converter.py` | Gemini thinking 配置生成和 signature 处理 |
+| `src/gemini/handler.py` | Gemini 响应流处理，signature_delta 事件 |
+| `src/custom_api/converter.py` | OpenAI 格式 thinking 转换（提示词注入 + 流解析） |
+| `src/custom_api/handler.py` | Claude 格式透传和 Azure 清理逻辑 |
+| `src/auth/account_manager.py` | Gemini thinking 模型路由 |
+| `src/main.py` | API 端点和智能路由逻辑 |
+| `src/processing/cache_manager.py` | Thinking 块缓存支持 |
 
 ---
 

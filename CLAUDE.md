@@ -12,24 +12,25 @@ Amazon Q to Claude API Proxy - 将 Claude API 请求转换为 Amazon Q/CodeWhisp
 
 ### 请求流程
 ```
-Claude API 请求 → main.py → converter.py → Amazon Q API
+Claude API 请求 → src/main.py → src/amazonq/converter.py → Amazon Q API
                      ↓
-                 auth.py (Token 管理)
+                 src/auth/auth.py (Token 管理)
                      ↓
-Amazon Q Event Stream → event_stream_parser.py → parser.py → stream_handler_new.py → Claude SSE 响应
+Amazon Q Event Stream → src/amazonq/event_stream_parser.py → src/amazonq/parser.py → src/amazonq/stream_handler.py → Claude SSE 响应
 ```
 
 ### 关键模块职责
 
-- **main.py**: FastAPI 服务器,处理 `/v1/messages` 端点
-- **converter.py**: 请求格式转换 (Claude → Amazon Q)
-- **event_stream_parser.py**: 解析 AWS Event Stream 二进制格式
-- **parser.py**: 事件类型转换 (Amazon Q → Claude)
-- **stream_handler_new.py**: 流式响应处理和事件生成
-- **message_processor.py**: 历史消息合并,确保 user-assistant 交替
-- **auth.py**: Token 自动刷新机制
-- **config.py**: 配置管理和 Token 缓存
-- **models.py**: 数据结构定义
+- **src/main.py**: FastAPI 服务器,处理 `/v1/messages` 端点
+- **src/amazonq/converter.py**: 请求格式转换 (Claude → Amazon Q)
+- **src/amazonq/event_stream_parser.py**: 解析 AWS Event Stream 二进制格式
+- **src/amazonq/parser.py**: 事件类型转换 (Amazon Q → Claude)
+- **src/amazonq/stream_handler.py**: 流式响应处理和事件生成
+- **src/processing/message_processor.py**: 历史消息合并,确保 user-assistant 交替
+- **src/auth/auth.py**: Token 自动刷新机制
+- **src/auth/account_manager.py**: 多账号管理
+- **src/config.py**: 配置管理和 Token 缓存
+- **src/models.py**: 数据结构定义
 
 ## 常用命令
 
@@ -119,13 +120,13 @@ Amazon Q 的 `description` 字段限制 10240 字符。超长描述会:
 ## 调试技巧
 
 ### 查看请求转换
-在 `main.py:169` 有完整请求体日志输出
+在 `src/main.py` 有完整请求体日志输出
 
 ### 查看事件流
-在 `stream_handler_new.py:94` 记录所有 Amazon Q 事件类型
+在 `src/amazonq/stream_handler.py` 记录所有 Amazon Q 事件类型
 
 ### 查看历史消息处理
-在 `main.py:116-127` 记录原始和处理后的历史消息摘要
+在 `src/main.py` 记录原始和处理后的历史消息摘要
 
 ## 常见问题
 
@@ -142,9 +143,9 @@ Amazon Q 的 `description` 字段限制 10240 字符。超长描述会:
 
 ## 代码修改注意事项
 
-1. **修改事件处理**: 同时更新 `parser.py` 和 `stream_handler_new.py`
-2. **修改请求转换**: 更新 `converter.py` 和对应的测试文件
-3. **修改数据结构**: 更新 `models.py` 中的 dataclass
+1. **修改事件处理**: 同时更新 `src/amazonq/parser.py` 和 `src/amazonq/stream_handler.py`
+2. **修改请求转换**: 更新 `src/amazonq/converter.py` 和对应的测试文件
+3. **修改数据结构**: 更新 `src/models.py` 中的 dataclass
 4. **添加新事件类型**: 在 `parse_amazonq_event()` 添加解析逻辑
 
 ## 参考文档
