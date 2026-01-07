@@ -519,6 +519,26 @@ async def handle_claude_format_stream(
             yield f"event: error\ndata: {json.dumps(error_response)}\n\n"
 
 
+def _convert_thinking_block_to_text(block: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    将无效的 thinking 块转换为文本块
+    
+    将缺少 signature 的 thinking 块转换为包含 <previous_thinking> 标签的文本块，
+    以保持思考链的连续性。
+    
+    Args:
+        block: thinking 块，格式为 {"type": "thinking", "thinking": "..."}
+    
+    Returns:
+        文本块，格式为 {"type": "text", "text": "<previous_thinking>...</previous_thinking>"}
+    """
+    thinking_content = block.get("thinking", "")
+    return {
+        "type": "text",
+        "text": f"<previous_thinking>{thinking_content}</previous_thinking>"
+    }
+
+
 def _clean_claude_request_for_azure(request_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     为 Azure Anthropic API 清理 Claude 请求数据
@@ -527,6 +547,20 @@ def _clean_claude_request_for_azure(request_data: Dict[str, Any]) -> Dict[str, A
     1. 不支持某些扩展字段（context_management, betas 等）
     2. 工具格式需要转换为标准格式（不支持 custom 类型包装）
     3. 所有消息必须有非空 content（除了最后一条 assistant 消息）
+    4. 当 thinking 启用时，最后一条 assistant 消息必须以 thinking 块开头
+    
+    处理逻辑：
+    1. 移除不支持的顶层字段（context_management, betas 等）
+    2. 检查最后一条 assistant 消息是否有有效的 thinking 块
+       - 如果没有有效的 thinking 块，需要禁用 thinking 功能
+    3. 处理 thinking 块：
+       - 有效的（有 signature）→ 保留
+       - 无效的（无 signature）→ 转换为 <previous_thinking> 文本
+    4. 处理 redacted_thinking 块：
+       - 有效的（有 data 且 thinking 启用）→ 保留
+       - 无效的（无 data）→ 移除
+    5. 清理工具格式
+    6. 确保消息内容非空
     
     Args:
         request_data: 原始请求数据
@@ -552,13 +586,41 @@ def _clean_claude_request_for_azure(request_data: Dict[str, Any]) -> Dict[str, A
     # 检查请求是否启用了 thinking
     thinking_enabled = "thinking" in cleaned and cleaned.get("thinking", {}).get("type") == "enabled"
     
-    # 跟踪是否有缺少 signature 的 thinking 块被移除
-    has_invalid_thinking = False
+    # Azure 特殊要求：当 thinking 启用时，最后一条 assistant 消息必须以 thinking 块开头
+    # 如果最后一条 assistant 消息没有有效的 thinking 块（有 signature），需要禁用 thinking
+    if thinking_enabled and "messages" in cleaned and isinstance(cleaned["messages"], list):
+        # 找到最后一条 assistant 消息
+        last_assistant_msg = None
+        for msg in reversed(cleaned["messages"]):
+            if isinstance(msg, dict) and msg.get("role") == "assistant":
+                last_assistant_msg = msg
+                break
+        
+        # 检查最后一条 assistant 消息是否以有效的 thinking 块开头
+        if last_assistant_msg:
+            content = last_assistant_msg.get("content")
+            has_valid_thinking_at_start = False
+            
+            if isinstance(content, list) and len(content) > 0:
+                first_block = content[0]
+                if isinstance(first_block, dict):
+                    if first_block.get("type") == "thinking" and first_block.get("signature"):
+                        has_valid_thinking_at_start = True
+            
+            if not has_valid_thinking_at_start:
+                # 最后一条 assistant 消息没有有效的 thinking 块开头
+                # 需要禁用 thinking 功能以避免 Azure API 报错
+                logger.info("最后一条 assistant 消息没有有效的 thinking 块开头，禁用 thinking 功能")
+                thinking_enabled = False
+                if "thinking" in cleaned:
+                    del cleaned["thinking"]
     
     # 清理 messages 字段：确保所有消息都有非空 content
     # 对于 thinking 块的处理：
     # - 如果 thinking 未启用：移除所有 thinking/redacted_thinking 块
-    # - 如果 thinking 已启用：保留有 signature 的，移除没有的
+    # - 如果 thinking 已启用：
+    #   - 有效 thinking 块（有 signature）→ 保留
+    #   - 无效 thinking 块（无 signature）→ 转换为 <previous_thinking> 文本块
     if "messages" in cleaned and isinstance(cleaned["messages"], list):
         cleaned_messages = []
         for idx, msg in enumerate(cleaned["messages"]):
@@ -583,9 +645,10 @@ def _clean_claude_request_for_azure(request_data: Dict[str, Any]) -> Dict[str, A
                                     # thinking 已启用且有 signature，保留
                                     cleaned_content.append(block)
                                 else:
-                                    # thinking 已启用但缺少 signature，移除
-                                    logger.debug(f"移除消息 {idx} 中缺少 signature 的 thinking 块")
-                                    has_invalid_thinking = True
+                                    # thinking 已启用但缺少 signature，转换为文本块
+                                    logger.debug(f"转换消息 {idx} 中缺少 signature 的 thinking 块为文本")
+                                    converted_block = _convert_thinking_block_to_text(block)
+                                    cleaned_content.append(converted_block)
                                 continue
                             
                             # 处理 redacted_thinking 块
@@ -595,10 +658,11 @@ def _clean_claude_request_for_azure(request_data: Dict[str, Any]) -> Dict[str, A
                                     logger.debug(f"移除消息 {idx} 中的 redacted_thinking 块（thinking 未启用）")
                                     continue
                                 elif block.get("data"):
+                                    # 有效的 redacted_thinking 块（有 data），保留
                                     cleaned_content.append(block)
                                 else:
-                                    logger.debug(f"移除消息 {idx} 中无效的 redacted_thinking 块")
-                                    has_invalid_thinking = True
+                                    # 无效的 redacted_thinking 块（无 data），移除
+                                    logger.debug(f"移除消息 {idx} 中无效的 redacted_thinking 块（无 data）")
                                 continue
                             
                             cleaned_content.append(block)
@@ -629,12 +693,6 @@ def _clean_claude_request_for_azure(request_data: Dict[str, Any]) -> Dict[str, A
                 cleaned_messages.append(msg)
         
         cleaned["messages"] = cleaned_messages
-    
-    # 如果有无效的 thinking 块被移除，需要禁用 thinking 功能
-    # 因为 API 要求：启用 thinking 时，assistant 消息必须以 thinking 块开头
-    if has_invalid_thinking and "thinking" in cleaned:
-        logger.info("检测到缺少 signature 的 thinking 块，禁用 thinking 功能以避免格式错误")
-        del cleaned["thinking"]
     
     # 清理 tools 字段
     if "tools" in cleaned and isinstance(cleaned["tools"], list):
@@ -731,6 +789,72 @@ def _clean_claude_request_for_azure(request_data: Dict[str, Any]) -> Dict[str, A
         if cleaned_tools:
             logger.info(f"第一个工具结构: {json.dumps(cleaned_tools[0], ensure_ascii=False)[:500]}")
         logger.info(f"工具清理完成: {len(cleaned['tools'])} 个工具")
+    
+    return cleaned
+
+
+def _remove_all_thinking_blocks_when_disabled(request_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    当 thinking 功能被禁用时，移除所有 thinking 和 redacted_thinking 块
+    
+    Args:
+        request_data: 请求数据
+    
+    Returns:
+        清理后的请求数据
+    """
+    # 深拷贝以避免修改原始数据
+    import copy
+    cleaned = copy.deepcopy(request_data)
+    
+    # 清理 messages 字段中的所有 thinking 块
+    if "messages" in cleaned and isinstance(cleaned["messages"], list):
+        cleaned_messages = []
+        for idx, msg in enumerate(cleaned["messages"]):
+            if isinstance(msg, dict):
+                content = msg.get("content")
+                role = msg.get("role", "")
+                
+                # 如果 content 是列表，需要清理 thinking 块
+                if isinstance(content, list):
+                    cleaned_content = []
+                    for block in content:
+                        if isinstance(block, dict):
+                            block_type = block.get("type")
+                            
+                            # 移除所有 thinking 相关的块
+                            if block_type in ["thinking", "redacted_thinking"]:
+                                logger.debug(f"移除消息 {idx} 中的 {block_type} 块（thinking 功能已禁用）")
+                                continue
+                            
+                            cleaned_content.append(block)
+                        else:
+                            cleaned_content.append(block)
+                    content = cleaned_content
+                    msg = {**msg, "content": content}
+                
+                # 检查 content 是否为空
+                is_empty = False
+                if content is None:
+                    is_empty = True
+                elif isinstance(content, str) and not content.strip():
+                    is_empty = True
+                elif isinstance(content, list) and len(content) == 0:
+                    is_empty = True
+                
+                if is_empty:
+                    # 最后一条 assistant 消息可以为空
+                    is_last = (idx == len(cleaned["messages"]) - 1)
+                    if role == "assistant" and is_last:
+                        cleaned_messages.append(msg)
+                    else:
+                        logger.debug(f"跳过空内容消息 {idx}: role={role}")
+                else:
+                    cleaned_messages.append(msg)
+            else:
+                cleaned_messages.append(msg)
+        
+        cleaned["messages"] = cleaned_messages
     
     return cleaned
 

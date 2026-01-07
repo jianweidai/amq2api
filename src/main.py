@@ -434,6 +434,25 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
                 
                 final_request = codewhisperer_dict
 
+        # 在发送请求前验证输入长度
+        from src.processing.input_validator import validate_input_length, count_images_in_request
+        is_valid, error_message, estimated_tokens = validate_input_length(request_data)
+        
+        if not is_valid:
+            image_count = count_images_in_request(request_data)
+            logger.error(f"输入验证失败: {error_message} (图片数量: {image_count})")
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": error_message
+                    },
+                    "estimated_tokens": estimated_tokens,
+                    "image_count": image_count
+                }
+            )
 
         # 构建 Amazon Q 特定的请求头（完整版本）
         import uuid

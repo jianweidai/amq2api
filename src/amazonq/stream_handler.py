@@ -152,6 +152,9 @@ class AmazonQStreamHandler:
                         # 直接处理 tool use 事件（移除冗余日志）
                         async for cli_event in self._handle_tool_use_event(event_info.get('payload', {})):
                             yield cli_event
+                    elif event_type is None:
+                        # 静默跳过没有事件类型的消息（可能是心跳包或流控制消息）
+                        logger.debug(f"跳过无事件类型的消息: {event_info}")
                     else:
                         logger.warning(f"跳过未知事件类型: {event_type}")
                     continue
