@@ -158,6 +158,51 @@
     </div>
 
     <div class="panel">
+      <h2>Gemini 渠道配置</h2>
+      <div class="row">
+        <button onclick="loadConfig()">加载配置</button>
+        <button onclick="syncModels()">同步官方模型</button>
+        <div id="sync_status" class="chip" style="display:none"></div>
+      </div>
+      <div id="config_editor" style="margin-top:16px;display:none">
+        <h3>Gemini 支持的所有模型</h3>
+        <p style="color:var(--muted);font-size:13px;margin-bottom:8px">从官方 API 同步的模型列表（只读）</p>
+        <div id="config_supported_list" class="list" style="max-height:200px;overflow-y:auto;background:var(--bg);border-radius:10px;padding:12px"></div>
+
+        <h3>Gemini 独占模型</h3>
+        <p style="color:var(--muted);font-size:13px;margin-bottom:8px">只能使用 Gemini 渠道的模型</p>
+        <div id="config_gemini_only_list" class="list"></div>
+        <div class="row" style="margin-top:8px">
+          <input id="new_gemini_only" placeholder="输入模型名称" style="flex:1" />
+          <button onclick="addGeminiOnly()">添加</button>
+        </div>
+
+        <h3>Amazon Q 独占模型</h3>
+        <p style="color:var(--muted);font-size:13px;margin-bottom:8px">只能使用 Amazon Q 渠道的模型</p>
+        <div id="config_amazonq_only_list" class="list"></div>
+        <div class="row" style="margin-top:8px">
+          <input id="new_amazonq_only" placeholder="输入模型名称" style="flex:1" />
+          <button onclick="addAmazonQOnly()">添加</button>
+        </div>
+
+        <h3>模型名称映射</h3>
+        <p style="color:var(--muted);font-size:13px;margin-bottom:8px">Claude 标准名称 → Gemini 模型名称</p>
+        <div id="config_mapping_list" class="list"></div>
+        <div class="row" style="margin-top:8px">
+          <input id="new_mapping_from" placeholder="源模型名" style="flex:1" />
+          <span style="color:var(--muted)">→</span>
+          <input id="new_mapping_to" placeholder="目标模型名" style="flex:1" />
+          <button onclick="addMapping()">添加</button>
+        </div>
+
+        <div class="row" style="margin-top:16px">
+          <button onclick="saveConfig()">保存配置</button>
+          <button class="btn-secondary" onclick="document.getElementById('config_editor').style.display='none'">取消</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
       <h2>账号列表</h2>
       <div class="row">
         <button onclick="loadAccounts()">刷新列表</button>
@@ -431,6 +476,17 @@ function renderAccounts(list) {
     if (acc.type === 'gemini' && other.project) {
       row('Project ID', other.project);
     }
+
+    // 添加调用统计信息
+    const statsDiv = document.createElement('div');
+    statsDiv.id = `stats_${acc.id}`;
+    statsDiv.style.marginTop = '12px';
+    statsDiv.innerHTML = '<span style="color: var(--muted); font-size: 12px;">加载统计中...</span>';
+    card.appendChild(statsDiv);
+
+    // 异步加载调用统计
+    loadAccountStats(acc.id);
+
     card.appendChild(meta);
 
     const actions = document.createElement('div');
@@ -457,6 +513,12 @@ function renderAccounts(list) {
       quotaBtn.onclick = () => viewQuota(acc.id);
       actions.appendChild(quotaBtn);
     }
+
+    const rateLimitBtn = document.createElement('button');
+    rateLimitBtn.className = 'btn-secondary';
+    rateLimitBtn.textContent = '配置限流';
+    rateLimitBtn.onclick = () => configureRateLimit(acc);
+    actions.appendChild(rateLimitBtn);
 
     const editBtn = document.createElement('button');
     editBtn.className = 'btn-secondary';
@@ -1165,6 +1227,272 @@ async function refreshAllTokens() {
     setTestStatus('批量刷新失败', false);
     alert('批量刷新失败：' + e.message);
   }
+}
+
+function setSyncStatus(text, ok=true) {
+  const el = document.getElementById('sync_status');
+  el.textContent = text;
+  el.className = ok ? 'chip success' : 'chip danger';
+  el.style.display = 'inline-flex';
+}
+
+let configData = {
+  gemini_only_models: [],
+  amazonq_only_models: [],
+  supported_models: [],
+  model_mapping: {}
+};
+
+function renderConfigList(containerId, items, onDelete) {
+  const container = document.getElementById(containerId);
+  container.innerHTML = '';
+  if (!items || items.length === 0) {
+    container.innerHTML = '<p style="color:var(--muted);font-size:13px">暂无配置</p>';
+    return;
+  }
+  items.forEach(item => {
+    const div = document.createElement('div');
+    div.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px';
+    div.innerHTML = `<span class="mono" style="flex:1;font-size:13px">${item}</span><button class="btn-danger" style="padding:4px 8px;font-size:12px">删除</button>`;
+    div.querySelector('button').onclick = () => onDelete(item);
+    container.appendChild(div);
+  });
+}
+
+function renderMappingList(items, onDelete) {
+  const container = document.getElementById('config_mapping_list');
+  container.innerHTML = '';
+  const entries = Object.entries(items || {});
+  if (entries.length === 0) {
+    container.innerHTML = '<p style="color:var(--muted);font-size:13px">暂无映射</p>';
+    return;
+  }
+  entries.forEach(([from, to]) => {
+    const div = document.createElement('div');
+    div.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px';
+    div.innerHTML = `<span class="mono" style="flex:1;font-size:13px">${from} → ${to}</span><button class="btn-danger" style="padding:4px 8px;font-size:12px">删除</button>`;
+    div.querySelector('button').onclick = () => onDelete(from);
+    container.appendChild(div);
+  });
+}
+
+function addGeminiOnly() {
+  const input = document.getElementById('new_gemini_only');
+  const value = input.value.trim();
+  if (!value) return;
+  if (configData.gemini_only_models.includes(value)) {
+    alert('模型已存在');
+    return;
+  }
+  configData.gemini_only_models.push(value);
+  renderConfigList('config_gemini_only_list', configData.gemini_only_models, (item) => {
+    configData.gemini_only_models = configData.gemini_only_models.filter(m => m !== item);
+    renderConfigList('config_gemini_only_list', configData.gemini_only_models, arguments.callee);
+  });
+  input.value = '';
+}
+
+function addAmazonQOnly() {
+  const input = document.getElementById('new_amazonq_only');
+  const value = input.value.trim();
+  if (!value) return;
+  if (configData.amazonq_only_models.includes(value)) {
+    alert('模型已存在');
+    return;
+  }
+  configData.amazonq_only_models.push(value);
+  renderConfigList('config_amazonq_only_list', configData.amazonq_only_models, (item) => {
+    configData.amazonq_only_models = configData.amazonq_only_models.filter(m => m !== item);
+    renderConfigList('config_amazonq_only_list', configData.amazonq_only_models, arguments.callee);
+  });
+  input.value = '';
+}
+
+function addMapping() {
+  const fromInput = document.getElementById('new_mapping_from');
+  const toInput = document.getElementById('new_mapping_to');
+  const from = fromInput.value.trim();
+  const to = toInput.value.trim();
+  if (!from || !to) {
+    alert('请输入完整的映射关系');
+    return;
+  }
+  if (configData.model_mapping[from]) {
+    alert('源模型已存在映射');
+    return;
+  }
+  configData.model_mapping[from] = to;
+  renderMappingList(configData.model_mapping, (key) => {
+    delete configData.model_mapping[key];
+    renderMappingList(configData.model_mapping, arguments.callee);
+  });
+  fromInput.value = '';
+  toInput.value = '';
+}
+
+async function loadConfig() {
+  try {
+    const r = await authFetch('/v2/config');
+    if (!r.ok) throw new Error(await r.text());
+    const config = await r.json();
+
+    configData = {
+      gemini_only_models: config.gemini_only_models || [],
+      amazonq_only_models: config.amazonq_only_models || [],
+      supported_models: config.supported_models || [],
+      model_mapping: config.model_mapping || {}
+    };
+
+    renderConfigList('config_supported_list', configData.supported_models, null);
+    renderConfigList('config_gemini_only_list', configData.gemini_only_models, (item) => {
+      configData.gemini_only_models = configData.gemini_only_models.filter(m => m !== item);
+      renderConfigList('config_gemini_only_list', configData.gemini_only_models, arguments.callee);
+    });
+    renderConfigList('config_amazonq_only_list', configData.amazonq_only_models, (item) => {
+      configData.amazonq_only_models = configData.amazonq_only_models.filter(m => m !== item);
+      renderConfigList('config_amazonq_only_list', configData.amazonq_only_models, arguments.callee);
+    });
+    renderMappingList(configData.model_mapping, (key) => {
+      delete configData.model_mapping[key];
+      renderMappingList(configData.model_mapping, arguments.callee);
+    });
+
+    document.getElementById('config_editor').style.display = 'block';
+    setSyncStatus('配置已加载', true);
+  } catch(e) {
+    alert('加载配置失败：' + e.message);
+  }
+}
+
+async function saveConfig() {
+  try {
+    const r = await authFetch('/v2/config', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        gemini_only_models: configData.gemini_only_models,
+        amazonq_only_models: configData.amazonq_only_models,
+        supported_models: configData.supported_models,
+        model_mapping: configData.model_mapping
+      })
+    });
+
+    if (!r.ok) throw new Error(await r.text());
+    setSyncStatus('配置已保存', true);
+    setTimeout(() => { document.getElementById('sync_status').style.display = 'none'; }, 3000);
+  } catch(e) {
+    alert('保存配置失败：' + e.message);
+  }
+}
+
+async function syncModels() {
+  if (!confirm('确认同步官方模型列表？这将从 Anthropic 和 Google 官方获取最新的模型列表。')) {
+    return;
+  }
+
+  setSyncStatus('正在同步...', true);
+
+  try {
+    const r = await authFetch('/v2/config/sync-models', { method: 'POST' });
+    if (!r.ok) throw new Error(await r.text());
+
+    const data = await r.json();
+    setSyncStatus(`同步成功：${data.total_models} 个模型`, true);
+
+    // 自动重新加载配置
+    await loadConfig();
+  } catch(e) {
+    setSyncStatus('同步失败', false);
+    alert('同步模型失败：' + e.message);
+  }
+}
+
+async function loadAccountStats(accountId) {
+  try {
+    const r = await authFetch(`/v2/accounts/${accountId}/stats`);
+    if (!r.ok) throw new Error(await r.text());
+    const stats = await r.json();
+
+    const statsDiv = document.getElementById(`stats_${accountId}`);
+    if (!statsDiv) return;
+
+    const isLimited = stats.is_rate_limited;
+    const color = isLimited ? 'var(--danger)' : 'var(--success)';
+
+    statsDiv.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;padding:12px;background:var(--panel);border-radius:8px;border:1px solid var(--border)">
+        <div>
+          <div style="font-size:11px;color:var(--muted)">限流配置</div>
+          <div style="font-size:14px;font-weight:600">${stats.rate_limit_per_hour}/小时</div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--muted)">过去1小时</div>
+          <div style="font-size:14px;font-weight:600;color:${color}">${stats.calls_last_hour}次</div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--muted)">剩余次数</div>
+          <div style="font-size:14px;font-weight:600;color:${color}">${stats.remaining_calls}次</div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--muted)">总调用</div>
+          <div style="font-size:14px;font-weight:600">${stats.total_calls}次</div>
+        </div>
+      </div>
+    `;
+  } catch(e) {
+    const statsDiv = document.getElementById(`stats_${accountId}`);
+    if (statsDiv) {
+      statsDiv.innerHTML = '<span style="color: var(--danger); font-size: 12px;">加载统计失败</span>';
+    }
+  }
+}
+
+async function configureRateLimit(acc) {
+  const currentLimit = acc.rate_limit_per_hour || 20;
+
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:1000';
+  modal.innerHTML = `
+    <div style="background:var(--panel);border-radius:16px;max-width:400px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.3);padding:24px">
+      <h3 style="margin:0 0 16px 0">配置限流</h3>
+      <p style="color:var(--muted);font-size:13px;margin-bottom:16px">设置账号 "${acc.label || acc.id.substring(0,8)}" 每小时允许的调用次数</p>
+      <div style="margin-bottom:16px">
+        <label style="display:block;margin-bottom:8px;color:var(--muted);font-size:13px">每小时调用次数限制</label>
+        <input id="rate_limit_input" type="number" min="1" value="${currentLimit}" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px">
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button onclick="this.closest('div[style*=fixed]').remove()" style="padding:8px 16px;border-radius:8px;border:none;background:var(--muted);color:white;cursor:pointer">取消</button>
+        <button id="save_rate_limit" style="padding:8px 16px;border-radius:8px;border:none;background:var(--accent);color:white;cursor:pointer">保存</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+
+  document.getElementById('save_rate_limit').onclick = async () => {
+    const newLimit = parseInt(document.getElementById('rate_limit_input').value);
+
+    if (isNaN(newLimit) || newLimit < 1) {
+      alert('请输入有效的限流次数（至少为 1）');
+      return;
+    }
+
+    try {
+      const r = await authFetch(`/v2/accounts/${acc.id}/rate-limit`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ rate_limit_per_hour: newLimit })
+      });
+
+      if (!r.ok) throw new Error(await r.text());
+
+      modal.remove();
+      await loadAccounts();
+    } catch(e) {
+      alert('保存失败：' + e.message);
+    }
+  };
 }
 
 window.addEventListener('DOMContentLoaded', () => {
