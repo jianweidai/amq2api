@@ -469,8 +469,8 @@ def clean_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
         "exclusiveMinimum": "exclusiveMinimum"
     }
 
-    # 需要完全移除的字段
-    fields_to_remove = {"$schema", "additionalProperties"}
+    # 需要完全移除的字段（Gemini 不支持这些 JSON Schema 扩展）
+    fields_to_remove = {"$schema", "additionalProperties", "propertyNames", "patternProperties", "unevaluatedProperties"}
 
     # 收集验证信息
     validations = []
