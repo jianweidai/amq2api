@@ -301,6 +301,14 @@ async def handle_gemini_stream(
         logger.info(f"[Token统计] 已记录: model={model}, input={input_tokens}, output={output_tokens}, cache_creation={cache_creation_input_tokens}, cache_read={cache_read_input_tokens}")
     except Exception as e:
         logger.error(f"记录 token 使用量失败: {e}")
+    
+    # 记录 API 调用（用于限流统计）
+    if account_id:
+        try:
+            from src.auth.account_manager import record_api_call
+            record_api_call(account_id, model)
+        except Exception as e:
+            logger.error(f"记录 API 调用失败: {e}")
 
 
 def format_sse_event(event_type: str, data: dict) -> str:

@@ -135,7 +135,8 @@ def _sqlite_ensure_db():
                 created_at TEXT,
                 updated_at TEXT,
                 enabled INTEGER DEFAULT 1,
-                type TEXT DEFAULT 'amazonq'
+                type TEXT DEFAULT 'amazonq',
+                rate_limit_per_hour INTEGER DEFAULT 20
             )
             """
         )
@@ -147,6 +148,29 @@ def _sqlite_ensure_db():
             conn.execute("ALTER TABLE accounts ADD COLUMN type TEXT DEFAULT 'amazonq'")
         if 'weight' not in columns:
             conn.execute("ALTER TABLE accounts ADD COLUMN weight INTEGER DEFAULT 50")
+        if 'rate_limit_per_hour' not in columns:
+            conn.execute("ALTER TABLE accounts ADD COLUMN rate_limit_per_hour INTEGER DEFAULT 20")
+
+        # 创建调用记录表
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS call_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                model TEXT,
+                FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+            )
+            """
+        )
+
+        # 创建索引以加速查询
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_call_logs_account_timestamp
+            ON call_logs(account_id, timestamp)
+            """
+        )
 
         conn.commit()
 
@@ -214,14 +238,32 @@ def _mysql_ensure_db():
                     updated_at VARCHAR(32),
                     enabled TINYINT DEFAULT 1,
                     type VARCHAR(32) DEFAULT 'amazonq',
-                    weight INT DEFAULT 50
+                    weight INT DEFAULT 50,
+                    rate_limit_per_hour INT DEFAULT 20
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                 """
             )
-            # 迁移：为已存在的表添加 weight 字段
+            # 迁移：为已存在的表添加字段
             cursor.execute(f"SHOW COLUMNS FROM `{ACCOUNTS_TABLE}` LIKE 'weight'")
             if not cursor.fetchone():
                 cursor.execute(f"ALTER TABLE `{ACCOUNTS_TABLE}` ADD COLUMN weight INT DEFAULT 50")
+            cursor.execute(f"SHOW COLUMNS FROM `{ACCOUNTS_TABLE}` LIKE 'rate_limit_per_hour'")
+            if not cursor.fetchone():
+                cursor.execute(f"ALTER TABLE `{ACCOUNTS_TABLE}` ADD COLUMN rate_limit_per_hour INT DEFAULT 20")
+            
+            # 创建调用记录表
+            cursor.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS `{TABLE_PREFIX}call_logs` (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    account_id VARCHAR(36) NOT NULL,
+                    timestamp VARCHAR(32) NOT NULL,
+                    model VARCHAR(255),
+                    INDEX idx_account_timestamp (account_id, timestamp),
+                    FOREIGN KEY (account_id) REFERENCES `{ACCOUNTS_TABLE}`(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
         conn.commit()
     finally:
         conn.close()
@@ -371,12 +413,22 @@ def get_random_account(account_type: Optional[str] = None, model: Optional[str] 
     if not accounts:
         return None
 
-    # 过滤掉冷却中的账号
-    available_accounts = [acc for acc in accounts if not is_account_in_cooldown(acc.get('id'))]
+    # 过滤掉冷却中和限流的账号
+    available_accounts = []
+    for acc in accounts:
+        acc_id = acc.get('id')
+        # 检查冷却
+        if is_account_in_cooldown(acc_id):
+            logger.debug(f"账号 {acc.get('label')} (ID: {acc_id[:8]}...) 在冷却中，跳过")
+            continue
+        # 检查限流
+        if not check_rate_limit(acc_id):
+            logger.debug(f"账号 {acc.get('label')} (ID: {acc_id[:8]}...) 已达到限流，跳过")
+            continue
+        available_accounts.append(acc)
     
     if not available_accounts:
-        # 如果所有账号都在冷却中，记录日志但仍返回 None
-        logger.warning(f"所有 {account_type or '全部'} 类型的账号都在冷却中")
+        logger.warning(f"所有 {account_type or '全部'} 类型的账号都在冷却中或已限流")
         return None
 
     # 如果是 Gemini 账号且指定了模型，需要检查配额
@@ -473,7 +525,8 @@ def create_account(
     other: Optional[Dict[str, Any]] = None,
     enabled: bool = True,
     account_type: str = "amazonq",
-    weight: int = 50
+    weight: int = 50,
+    rate_limit_per_hour: int = 20
 ) -> Dict[str, Any]:
     """创建新账号"""
     now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
@@ -486,10 +539,10 @@ def create_account(
             with conn.cursor() as cursor:
                 cursor.execute(
                     f"""
-                    INSERT INTO `{ACCOUNTS_TABLE}` (id, label, clientId, clientSecret, refreshToken, accessToken, other, last_refresh_time, last_refresh_status, created_at, updated_at, enabled, type, weight)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO `{ACCOUNTS_TABLE}` (id, label, clientId, clientSecret, refreshToken, accessToken, other, last_refresh_time, last_refresh_status, created_at, updated_at, enabled, type, weight, rate_limit_per_hour)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (acc_id, label, client_id, client_secret, refresh_token, access_token, other_str, None, "never", now, now, 1 if enabled else 0, account_type, weight)
+                    (acc_id, label, client_id, client_secret, refresh_token, access_token, other_str, None, "never", now, now, 1 if enabled else 0, account_type, weight, rate_limit_per_hour)
                 )
                 cursor.execute(f"SELECT * FROM `{ACCOUNTS_TABLE}` WHERE id=%s", (acc_id,))
                 row = cursor.fetchone()
@@ -500,10 +553,10 @@ def create_account(
         with _sqlite_conn() as conn:
             conn.execute(
                 f"""
-                INSERT INTO {ACCOUNTS_TABLE} (id, label, clientId, clientSecret, refreshToken, accessToken, other, last_refresh_time, last_refresh_status, created_at, updated_at, enabled, type, weight)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO {ACCOUNTS_TABLE} (id, label, clientId, clientSecret, refreshToken, accessToken, other, last_refresh_time, last_refresh_status, created_at, updated_at, enabled, type, weight, rate_limit_per_hour)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (acc_id, label, client_id, client_secret, refresh_token, access_token, other_str, None, "never", now, now, 1 if enabled else 0, account_type, weight)
+                (acc_id, label, client_id, client_secret, refresh_token, access_token, other_str, None, "never", now, now, 1 if enabled else 0, account_type, weight, rate_limit_per_hour)
             )
             conn.commit()
             row = conn.execute(f"SELECT * FROM {ACCOUNTS_TABLE} WHERE id=?", (acc_id,)).fetchone()
@@ -822,6 +875,199 @@ def mark_model_exhausted(account_id: str, model: str, reset_time: str) -> None:
 
     update_account(account_id, other=other)
     logger.info(f"已标记账号 {account_id} 的模型 {model} 配额用完，重置时间: {reset_time}")
+
+
+# ============== 限流和统计功能 ==============
+
+def record_api_call(account_id: str, model: Optional[str] = None) -> None:
+    """记录账号的 API 调用
+
+    Args:
+        account_id: 账号 ID
+        model: 使用的模型名称
+    """
+    now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+    
+    if USE_MYSQL:
+        conn = _mysql_get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    f"INSERT INTO `{TABLE_PREFIX}call_logs` (account_id, timestamp, model) VALUES (%s, %s, %s)",
+                    (account_id, now, model)
+                )
+        finally:
+            conn.close()
+    else:
+        with _sqlite_conn() as conn:
+            conn.execute(
+                "INSERT INTO call_logs (account_id, timestamp, model) VALUES (?, ?, ?)",
+                (account_id, now, model)
+            )
+            conn.commit()
+
+
+def check_rate_limit(account_id: str) -> bool:
+    """检查账号是否超过速率限制（滑动窗口）
+
+    Args:
+        account_id: 账号 ID
+
+    Returns:
+        True 如果未超过限制，False 如果已超过限制
+    """
+    account = get_account(account_id)
+    if not account:
+        return False
+
+    rate_limit = account.get("rate_limit_per_hour", 20)
+
+    # 计算一小时前的时间戳
+    one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+    one_hour_ago_str = one_hour_ago.strftime("%Y-%m-%dT%H:%M:%S")
+
+    # 查询过去一小时内的调用次数
+    if USE_MYSQL:
+        conn = _mysql_get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    f"SELECT COUNT(*) as count FROM `{TABLE_PREFIX}call_logs` WHERE account_id=%s AND timestamp >= %s",
+                    (account_id, one_hour_ago_str)
+                )
+                result = cursor.fetchone()
+                call_count = result['count'] if result else 0
+        finally:
+            conn.close()
+    else:
+        with _sqlite_conn() as conn:
+            result = conn.execute(
+                "SELECT COUNT(*) FROM call_logs WHERE account_id=? AND timestamp >= ?",
+                (account_id, one_hour_ago_str)
+            ).fetchone()
+            call_count = result[0] if result else 0
+
+    return call_count < rate_limit
+
+
+def get_account_call_stats(account_id: str) -> Dict[str, Any]:
+    """获取账号的调用统计信息
+
+    Args:
+        account_id: 账号 ID
+
+    Returns:
+        包含统计信息的字典
+    """
+    one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+    one_hour_ago_str = one_hour_ago.strftime("%Y-%m-%dT%H:%M:%S")
+    
+    one_day_ago = datetime.now(timezone.utc) - timedelta(days=1)
+    one_day_ago_str = one_day_ago.strftime("%Y-%m-%dT%H:%M:%S")
+
+    if USE_MYSQL:
+        conn = _mysql_get_connection()
+        try:
+            with conn.cursor() as cursor:
+                # 过去一小时
+                cursor.execute(
+                    f"SELECT COUNT(*) as count FROM `{TABLE_PREFIX}call_logs` WHERE account_id=%s AND timestamp >= %s",
+                    (account_id, one_hour_ago_str)
+                )
+                result = cursor.fetchone()
+                calls_last_hour = result['count'] if result else 0
+                
+                # 过去24小时
+                cursor.execute(
+                    f"SELECT COUNT(*) as count FROM `{TABLE_PREFIX}call_logs` WHERE account_id=%s AND timestamp >= %s",
+                    (account_id, one_day_ago_str)
+                )
+                result = cursor.fetchone()
+                calls_last_day = result['count'] if result else 0
+                
+                # 总调用次数
+                cursor.execute(
+                    f"SELECT COUNT(*) as count FROM `{TABLE_PREFIX}call_logs` WHERE account_id=%s",
+                    (account_id,)
+                )
+                result = cursor.fetchone()
+                total_calls = result['count'] if result else 0
+        finally:
+            conn.close()
+    else:
+        with _sqlite_conn() as conn:
+            # 过去一小时
+            result = conn.execute(
+                "SELECT COUNT(*) FROM call_logs WHERE account_id=? AND timestamp >= ?",
+                (account_id, one_hour_ago_str)
+            ).fetchone()
+            calls_last_hour = result[0] if result else 0
+            
+            # 过去24小时
+            result = conn.execute(
+                "SELECT COUNT(*) FROM call_logs WHERE account_id=? AND timestamp >= ?",
+                (account_id, one_day_ago_str)
+            ).fetchone()
+            calls_last_day = result[0] if result else 0
+            
+            # 总调用次数
+            result = conn.execute(
+                "SELECT COUNT(*) FROM call_logs WHERE account_id=?",
+                (account_id,)
+            ).fetchone()
+            total_calls = result[0] if result else 0
+
+    account = get_account(account_id)
+    rate_limit = account.get("rate_limit_per_hour", 20) if account else 20
+
+    return {
+        "account_id": account_id,
+        "calls_last_hour": calls_last_hour,
+        "calls_last_day": calls_last_day,
+        "total_calls": total_calls,
+        "rate_limit_per_hour": rate_limit,
+        "remaining_quota": max(0, rate_limit - calls_last_hour)
+    }
+
+
+def update_account_rate_limit(account_id: str, rate_limit_per_hour: int) -> Optional[Dict[str, Any]]:
+    """更新账号的速率限制
+
+    Args:
+        account_id: 账号 ID
+        rate_limit_per_hour: 每小时调用限制
+
+    Returns:
+        更新后的账号信息
+    """
+    now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+    
+    if USE_MYSQL:
+        conn = _mysql_get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    f"UPDATE `{ACCOUNTS_TABLE}` SET rate_limit_per_hour=%s, updated_at=%s WHERE id=%s",
+                    (rate_limit_per_hour, now, account_id)
+                )
+                if cursor.rowcount == 0:
+                    return None
+                cursor.execute(f"SELECT * FROM `{ACCOUNTS_TABLE}` WHERE id=%s", (account_id,))
+                row = cursor.fetchone()
+                return _row_to_dict(row) if row else None
+        finally:
+            conn.close()
+    else:
+        with _sqlite_conn() as conn:
+            cur = conn.execute(
+                f"UPDATE {ACCOUNTS_TABLE} SET rate_limit_per_hour=?, updated_at=? WHERE id=?",
+                (rate_limit_per_hour, now, account_id)
+            )
+            conn.commit()
+            if cur.rowcount == 0:
+                return None
+            row = conn.execute(f"SELECT * FROM {ACCOUNTS_TABLE} WHERE id=?", (account_id,)).fetchone()
+            return _row_to_dict(row) if row else None
 
 
 # 初始化数据库

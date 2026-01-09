@@ -20,8 +20,12 @@ def apply_model_mapping(account: Dict[str, Any], requested_model: str) -> str:
     Returns:
         映射后的模型名称，如果没有匹配的映射则返回原始模型名称
     """
-    # 获取 other 字段
-    other = account.get("other", {})
+    # 获取 other 字段，确保不为 None
+    other = account.get("other")
+    
+    # 如果 other 为 None 或空，直接返回原始模型
+    if not other:
+        return requested_model
     
     # 如果 other 是字符串，尝试解析为 JSON
     if isinstance(other, str):
@@ -30,6 +34,11 @@ def apply_model_mapping(account: Dict[str, Any], requested_model: str) -> str:
         except json.JSONDecodeError as e:
             logger.warning(f"解析账号 {account.get('id')} 的 other 字段失败: {e}")
             return requested_model
+    
+    # 确保 other 是字典类型
+    if not isinstance(other, dict):
+        logger.warning(f"账号 {account.get('id')} 的 other 字段类型错误: {type(other)}")
+        return requested_model
     
     # 获取模型映射列表
     model_mappings = other.get("modelMappings", [])

@@ -10,7 +10,10 @@ logger = logging.getLogger(__name__)
 
 # Amazon Q 输入长度限制（tokens）
 # 根据实际测试，Amazon Q 的限制大约在 30000-40000 tokens 左右
-AMAZONQ_MAX_INPUT_TOKENS = 30000
+# 注意：这个限制是预防性的，实际限制可能更高
+# 如果遇到误报，可以通过环境变量 AMAZONQ_MAX_INPUT_TOKENS 调整
+import os
+AMAZONQ_MAX_INPUT_TOKENS = int(os.getenv("AMAZONQ_MAX_INPUT_TOKENS", "100000"))  # 提高到 100k，更宽松
 
 # 图片 token 估算：每张图片大约消耗的 tokens
 # Base64 编码的图片数据量很大，需要特别估算

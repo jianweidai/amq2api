@@ -1,0 +1,65 @@
+feat: 同步 main 分支核心功能到 release 分支
+
+## 新增功能
+
+### 1. 账号调用统计和滑动窗口限流
+- 新增 call_logs 表记录 API 调用历史
+- 新增 rate_limit_per_hour 字段（默认 20 次/小时）
+- 实现滑动窗口限流算法
+- 自动过滤已限流的账号
+- 新增 API 端点：GET /v2/accounts/{account_id}/stats
+
+### 2. Gemini 429 错误自动换号重试
+- 检测 429 错误并区分速率限制和配额耗尽
+- 自动切换到其他可用 Gemini 账号重试
+- 与冷却机制和配额管理集成
+- 智能重试（仅在非指定账号时）
+
+### 3. Gemini 转换问题修复
+- 修复 tool_result 的 name 字段缺失问题
+- 跳过空 parts 的消息，避免 Gemini 400 错误
+
+### 4. 调用记录集成
+- 在 Amazon Q 和 Gemini 的 message_stop 事件中记录调用
+- 用于限流统计和账号使用分析
+
+## 技术细节
+
+**修改的文件：**
+- src/auth/account_manager.py - 添加限流和统计功能
+- src/main.py - 添加 Gemini 重试逻辑和统计端点
+- src/amazonq/stream_handler.py - 添加调用记录
+- src/gemini/handler.py - 添加调用记录
+- src/gemini/converter.py - 修复 tool_result 和空 content 问题
+
+**新增文件：**
+- tests/test_rate_limit.py - 限流功能测试
+- SYNC_MAIN_FEATURES.md - 功能同步文档
+
+**数据库变更：**
+- 新增 call_logs 表（SQLite 和 MySQL）
+- 新增 rate_limit_per_hour 字段
+- 自动迁移，向后兼容
+
+## 测试
+
+- 所有 144 个测试通过 ✅
+- 新增 2 个限流测试
+- 向后兼容现有功能
+
+## 架构保持
+
+保留 release 分支的优势：
+- ✅ src/ 模块化目录结构
+- ✅ 完整的测试覆盖
+- ✅ Prompt Caching 模拟
+- ✅ Input Validator
+- ✅ Azure Thinking Continuity
+- ✅ Model Mapper
+
+## 兼容性
+
+- 向后兼容现有 API
+- 数据库自动迁移
+- 不影响现有账号
+- 默认限流值为 20 次/小时

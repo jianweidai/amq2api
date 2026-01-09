@@ -168,14 +168,15 @@ class TestValidateInputLength:
     
     def test_invalid_long_input(self):
         """测试超长输入"""
-        # 创建一个非常长的消息
+        # 创建一个非常长的消息（超过默认的 100k tokens 限制）
         long_text = "a" * 500000  # 约 125000 tokens
         request_data = {
             "messages": [
                 {"role": "user", "content": long_text}
             ]
         }
-        is_valid, error, tokens = validate_input_length(request_data)
+        # 使用较小的限制来测试
+        is_valid, error, tokens = validate_input_length(request_data, max_tokens=50000)
         assert is_valid is False
         assert error is not None
         assert "超过" in error or "限制" in error

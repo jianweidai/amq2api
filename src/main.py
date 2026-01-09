@@ -24,7 +24,8 @@ from src.auth.auth import get_auth_headers_with_retry, refresh_account_token, No
 from src.auth.account_manager import (
     list_enabled_accounts, list_all_accounts, get_account,
     create_account, update_account, delete_account, get_random_account,
-    get_random_channel_by_model
+    get_random_channel_by_model, record_api_call, check_rate_limit,
+    get_account_call_stats, update_account_rate_limit
 )
 from src.models import ClaudeRequest
 from src.amazonq.converter import convert_claude_to_codewhisperer_request, codewhisperer_request_to_dict
@@ -171,6 +172,7 @@ class AccountCreate(BaseModel):
     enabled: Optional[bool] = True
     type: str = "amazonq"  # amazonq, gemini, 或 custom_api
     weight: Optional[int] = 50  # 权重，越大被选中概率越高（建议1-100）
+    rate_limit_per_hour: Optional[int] = 20  # 每小时调用限制
 
 
 class AccountUpdate(BaseModel):
@@ -182,6 +184,7 @@ class AccountUpdate(BaseModel):
     other: Optional[Dict[str, Any]] = None
     enabled: Optional[bool] = None
     weight: Optional[int] = None  # 权重，越大被选中概率越高（建议1-100）
+    rate_limit_per_hour: Optional[int] = None  # 每小时调用限制
 
 
 @app.get("/")
@@ -434,25 +437,31 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
                 
                 final_request = codewhisperer_dict
 
-        # 在发送请求前验证输入长度
-        from src.processing.input_validator import validate_input_length, count_images_in_request
-        is_valid, error_message, estimated_tokens = validate_input_length(request_data)
-        
-        if not is_valid:
-            image_count = count_images_in_request(request_data)
-            logger.error(f"输入验证失败: {error_message} (图片数量: {image_count})")
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "type": "error",
-                    "error": {
-                        "type": "invalid_request_error",
-                        "message": error_message
-                    },
-                    "estimated_tokens": estimated_tokens,
-                    "image_count": image_count
-                }
-            )
+        # 在发送请求前验证输入长度（仅对 Amazon Q，因为它的限制较严格）
+        # 可以通过环境变量 AMAZONQ_MAX_INPUT_TOKENS 调整限制
+        # 或设置 DISABLE_INPUT_VALIDATION=true 完全禁用验证
+        import os
+        if os.getenv("DISABLE_INPUT_VALIDATION", "").lower() != "true":
+            from src.processing.input_validator import validate_input_length, count_images_in_request
+            is_valid, error_message, estimated_tokens = validate_input_length(request_data)
+            
+            if not is_valid:
+                image_count = count_images_in_request(request_data)
+                logger.warning(f"输入验证失败: {error_message} (图片数量: {image_count})")
+                # 注意：这只是警告，不阻止请求继续
+                # 如果需要严格验证，取消下面的注释
+                # raise HTTPException(
+                #     status_code=400,
+                #     detail={
+                #         "type": "error",
+                #         "error": {
+                #             "type": "invalid_request_error",
+                #             "message": error_message
+                #         },
+                #         "estimated_tokens": estimated_tokens,
+                #         "image_count": image_count
+                #     }
+                # )
 
         # 构建 Amazon Q 特定的请求头（完整版本）
         import uuid
@@ -679,10 +688,13 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
 
 
 @app.post("/v1/gemini/messages")
-async def create_gemini_message(request: Request, _: bool = Depends(verify_api_key)):
+async def create_gemini_message(request: Request, _: bool = Depends(verify_api_key), retry_account: Optional[Dict[str, Any]] = None):
     """
     Gemini API 端点
     接收 Claude 格式的请求，转换为 Gemini 格式并返回流式响应
+    
+    Args:
+        retry_account: 用于重试的账号（内部使用）
     """
     try:
         # 解析请求体
@@ -694,7 +706,11 @@ async def create_gemini_message(request: Request, _: bool = Depends(verify_api_k
         # 检查是否指定了特定账号（用于测试）
         specified_account_id = request.headers.get("X-Account-ID")
 
-        if specified_account_id:
+        if retry_account:
+            # 使用重试传入的账号
+            account = retry_account
+            logger.info(f"使用重试账号: {account['label']} (ID: {account['id']})")
+        elif specified_account_id:
             # 使用指定的账号
             account = get_account(specified_account_id)
             if not account:
@@ -833,7 +849,7 @@ async def create_gemini_message(request: Request, _: bool = Depends(verify_api_k
                             # 处理 429 Resource Exhausted 错误
                             if response.status_code == 429:
                                 try:
-                                    from src.auth.account_manager import mark_model_exhausted, update_account
+                                    from src.auth.account_manager import mark_model_exhausted, update_account, set_account_cooldown
                                     from src.gemini.converter import map_claude_model_to_gemini
 
                                     # 获取 Gemini 模型名称
@@ -875,20 +891,23 @@ async def create_gemini_message(request: Request, _: bool = Depends(verify_api_k
                                     # 判断是速率限制还是配额用完
                                     if remaining_fraction > 0.03:
                                         # 配额充足，是速率限制（RPM/TPM），设置 5 分钟冷却
-                                        from src.auth.account_manager import set_account_cooldown
                                         set_account_cooldown(account['id'], 300)  # 5 分钟冷却
                                         logger.warning(f"账号 {account['id']} 触发速率限制（RPM/TPM），进入 5 分钟冷却期，剩余配额: {remaining_fraction:.2%}")
+                                        
+                                        # 抛出特殊异常，让外层处理重试
                                         raise HTTPException(
                                             status_code=429,
-                                            detail=f"速率限制：账号已进入 5 分钟冷却期，请稍后重试（剩余配额: {remaining_fraction:.2%}）"
+                                            detail=f"RATE_LIMIT_RETRY_AVAILABLE:速率限制：账号已进入 5 分钟冷却期（剩余配额: {remaining_fraction:.2%}）"
                                         )
                                     else:
                                         # 配额不足，真的用完了
                                         mark_model_exhausted(account['id'], gemini_model, reset_time)
                                         logger.warning(f"账号 {account['id']} 的模型 {gemini_model} 配额已用完（剩余: {remaining_fraction:.2%}），重置时间: {reset_time}")
+                                        
+                                        # 抛出特殊异常，让外层处理重试
                                         raise HTTPException(
                                             status_code=429,
-                                            detail=f"配额已用完，重置时间: {reset_time}"
+                                            detail=f"QUOTA_EXHAUSTED_RETRY_AVAILABLE:配额已用完，重置时间: {reset_time}"
                                         )
 
                                 except HTTPException:
@@ -963,7 +982,21 @@ async def create_gemini_message(request: Request, _: bool = Depends(verify_api_k
             }
         )
 
-    except HTTPException:
+    except HTTPException as e:
+        # 检查是否是可重试的 429 错误
+        if e.status_code == 429 and not specified_account_id and not retry_account:
+            detail = str(e.detail)
+            if "RATE_LIMIT_RETRY_AVAILABLE:" in detail or "QUOTA_EXHAUSTED_RETRY_AVAILABLE:" in detail:
+                logger.info("检测到 429 错误，尝试切换到其他 Gemini 账号重试...")
+                new_account = get_random_account(account_type="gemini", model=claude_req.model)
+                if new_account and new_account['id'] != account['id']:
+                    logger.info(f"找到新账号 {new_account['label']} (ID: {new_account['id']})，开始重试")
+                    # 递归调用，使用新账号重试
+                    return await create_gemini_message(request, _, retry_account=new_account)
+                else:
+                    logger.warning("没有其他可用的 Gemini 账号")
+                    # 清理错误消息中的重试标记
+                    e.detail = detail.replace("RATE_LIMIT_RETRY_AVAILABLE:", "").replace("QUOTA_EXHAUSTED_RETRY_AVAILABLE:", "")
         raise
     except Exception as e:
         logger.error(f"处理 Gemini 请求时发生错误: {e}", exc_info=True)
@@ -1084,7 +1117,8 @@ async def create_account_endpoint(body: AccountCreate, _: bool = Depends(verify_
             other=body.other,
             enabled=body.enabled if body.enabled is not None else True,
             account_type=body.type,
-            weight=body.weight if body.weight is not None else 50
+            weight=body.weight if body.weight is not None else 50,
+            rate_limit_per_hour=body.rate_limit_per_hour if body.rate_limit_per_hour is not None else 20
         )
         return JSONResponse(content=account)
     except Exception as e:
@@ -1096,6 +1130,7 @@ async def create_account_endpoint(body: AccountCreate, _: bool = Depends(verify_
 async def update_account_endpoint(account_id: str, body: AccountUpdate, _: bool = Depends(verify_admin_key)):
     """更新账号信息"""
     try:
+        # 先更新基本字段
         account = update_account(
             account_id=account_id,
             label=body.label,
@@ -1109,6 +1144,11 @@ async def update_account_endpoint(account_id: str, body: AccountUpdate, _: bool 
         )
         if not account:
             raise HTTPException(status_code=404, detail="账号不存在")
+        
+        # 如果需要更新 rate_limit_per_hour
+        if body.rate_limit_per_hour is not None:
+            account = update_account_rate_limit(account_id, body.rate_limit_per_hour)
+        
         return JSONResponse(content=account)
     except HTTPException:
         raise
@@ -1282,6 +1322,30 @@ async def get_account_quota(account_id: str, _: bool = Depends(verify_admin_key)
     except Exception as e:
         logger.error(f"获取配额信息失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取配额信息失败: {str(e)}")
+
+
+@app.get("/v2/accounts/{account_id}/stats")
+async def get_account_stats(account_id: str, _: bool = Depends(verify_admin_key)):
+    """获取账号调用统计信息"""
+    try:
+        from src.auth.account_manager import get_account_call_stats, get_account_cooldown_remaining
+        
+        account = get_account(account_id)
+        if not account:
+            raise HTTPException(status_code=404, detail="账号不存在")
+        
+        # 获取调用统计
+        stats = get_account_call_stats(account_id)
+        
+        # 添加冷却状态
+        cooldown_remaining = get_account_cooldown_remaining(account_id)
+        stats["cooldown_remaining_seconds"] = cooldown_remaining
+        stats["is_in_cooldown"] = cooldown_remaining > 0
+        
+        return JSONResponse(content=stats)
+    except Exception as e:
+        logger.error(f"获取账号统计失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取账号统计失败: {str(e)}")
 
 
 @app.post("/v2/accounts/{account_id}/test")

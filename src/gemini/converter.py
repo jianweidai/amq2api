@@ -143,10 +143,16 @@ def convert_claude_to_gemini(claude_req: ClaudeRequest, project: str) -> Dict[st
                         content = item.get("content", "")
                         if isinstance(content, list):
                             content = content[0].get("text", "") if content else ""
+                        # 获取 tool_use_id 对应的 name
+                        tool_use_id = item.get("tool_use_id")
+                        # 优先使用 item 中的 name，如果没有则从映射中查找
+                        tool_name = item.get("name") or tool_id_to_name.get(tool_use_id, "")
+                        if not tool_name:
+                            logger.warning(f"tool_result 缺少 name 字段，tool_use_id: {tool_use_id}")
                         parts.append({
                             "functionResponse": {
-                                "id": item.get("tool_use_id"),
-                                "name": item.get("name", ""),
+                                "id": tool_use_id,
+                                "name": tool_name,
                                 "response": {"output": content}
                             }
                         })
@@ -161,6 +167,11 @@ def convert_claude_to_gemini(claude_req: ClaudeRequest, project: str) -> Dict[st
                 })
         else:
             parts = [{"text": str(msg.content)}]
+
+        # 跳过空 parts 的消息，避免 Gemini 400 错误
+        if not parts:
+            logger.warning(f"跳过空 content 的消息，role: {msg.role}")
+            continue
 
         contents.append({
             "role": role,

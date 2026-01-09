@@ -856,8 +856,8 @@
         label.textContent = '账号数据（每行格式：label|clientId|clientSecret|refreshToken|accessToken|project|api_endpoint）';
         textarea.placeholder = '我的账号|client_id|client_secret|refresh_token|access_token|project_id|api_endpoint';
       } else {
-        label.textContent = '账号数据（每行格式：type|label|clientId|clientSecret|refreshToken|accessToken|project|api_endpoint）';
-        textarea.placeholder = 'amazonq|我的账号|client_id|client_secret|refresh_token|access_token||';
+        label.textContent = '账号数据（新格式：type|label|clientId|clientSecret|refreshToken|accessToken|project|api_endpoint|weight|rate_limit|other_json，兼容旧格式）';
+        textarea.placeholder = 'amazonq|我的账号|client_id|client_secret|refresh_token|access_token|||50|20|{}';
       }
     }
 
@@ -1630,7 +1630,7 @@
         const line = lines[i].trim();
         const parts = line.split('|').map(p => p.trim());
 
-        let type, label, clientId, clientSecret, refreshToken, accessToken, project, api_endpoint;
+        let type, label, clientId, clientSecret, refreshToken, accessToken, project, api_endpoint, weight, rateLimit, otherJson;
 
         if (importType === 'amazonq') {
           if (parts.length < 6) {
@@ -1644,6 +1644,8 @@
           [clientId, clientSecret, refreshToken, accessToken] = rest;
           label = email; // 使用 email 作为 label
           type = 'amazonq';
+          weight = 50;
+          rateLimit = 20;
         } else if (importType === 'gemini') {
           if (parts.length < 5) {
             setImportStatus(`第 ${i + 1} 行格式错误`, false);
@@ -1652,18 +1654,46 @@
           }
           [label, clientId, clientSecret, refreshToken, accessToken, project, api_endpoint] = parts;
           type = 'gemini';
+          weight = 50;
+          rateLimit = 20;
         } else {
+          // 完整格式：自动检测新旧格式
           if (parts.length < 6) {
             setImportStatus(`第 ${i + 1} 行格式错误`, false);
             failed++;
             continue;
           }
-          [type, label, clientId, clientSecret, refreshToken, accessToken, project, api_endpoint] = parts;
+          
+          // 新格式（11字段）：type|label|clientId|clientSecret|refreshToken|accessToken|project|api_endpoint|weight|rate_limit|other_json
+          // 旧格式（8字段）：type|label|clientId|clientSecret|refreshToken|accessToken|project|api_endpoint
+          if (parts.length >= 11) {
+            // 新格式
+            [type, label, clientId, clientSecret, refreshToken, accessToken, project, api_endpoint, weight, rateLimit, otherJson] = parts;
+            weight = parseInt(weight) || 50;
+            rateLimit = parseInt(rateLimit) || 20;
+          } else {
+            // 旧格式（向后兼容）
+            [type, label, clientId, clientSecret, refreshToken, accessToken, project, api_endpoint] = parts;
+            weight = 50;
+            rateLimit = 20;
+            otherJson = '';
+          }
         }
 
+        // 构建 other 对象
         const other = {};
         if (project) other.project = project;
         if (api_endpoint) other.api_endpoint = api_endpoint;
+        
+        // 合并 otherJson 中的额外字段
+        if (otherJson) {
+          try {
+            const parsedOther = JSON.parse(otherJson);
+            Object.assign(other, parsedOther);
+          } catch (e) {
+            console.warn(`第 ${i + 1} 行: 无法解析 other JSON，跳过`, e);
+          }
+        }
 
         try {
           const r = await authFetch('/v2/accounts', {
@@ -1677,7 +1707,9 @@
               refreshToken: refreshToken || null,
               accessToken: accessToken || null,
               other: Object.keys(other).length > 0 ? other : null,
-              enabled: true
+              enabled: true,
+              weight: weight,
+              rate_limit_per_hour: rateLimit
             })
           });
 
@@ -1728,13 +1760,20 @@
           return;
         }
 
+        // 新格式：type|label|clientId|clientSecret|refreshToken|accessToken|project|api_endpoint|weight|rate_limit|other_json
         const lines = accounts.map(acc => {
           const other = acc.other || {};
-          if (acc.type === 'custom_api') {
-            // Custom API format: type|label|clientSecret(apiKey)|api_base|model|format
-            return `${acc.type}|${acc.label || ''}|${acc.clientSecret}|||${other.api_base || ''}|${other.model || ''}|${other.format || 'openai'}`;
-          }
-          return `${acc.type || 'amazonq'}|${acc.label || ''}|${acc.clientId}|${acc.clientSecret}|${acc.refreshToken || ''}|${acc.accessToken || ''}|${other.project || ''}|${other.api_endpoint || ''}`;
+          const weight = acc.weight || 50;
+          const rateLimit = acc.rate_limit_per_hour || 20;
+          
+          // 序列化 other 字段为 JSON（排除已单独导出的字段）
+          const otherCopy = { ...other };
+          delete otherCopy.project;
+          delete otherCopy.api_endpoint;
+          const otherJson = Object.keys(otherCopy).length > 0 ? JSON.stringify(otherCopy) : '';
+          
+          // 统一格式，所有账号类型使用相同的11字段格式
+          return `${acc.type || 'amazonq'}|${acc.label || ''}|${acc.clientId || ''}|${acc.clientSecret || ''}|${acc.refreshToken || ''}|${acc.accessToken || ''}|${other.project || ''}|${other.api_endpoint || ''}|${weight}|${rateLimit}|${otherJson}`;
         });
 
         const content = lines.join('\n');

@@ -353,6 +353,14 @@ class AmazonQStreamHandler:
                 )
             except Exception as e:
                 logger.error(f"记录 token 使用量失败: {e}")
+            
+            # 记录 API 调用（用于限流统计）
+            if self.account_id:
+                try:
+                    from src.auth.account_manager import record_api_call
+                    record_api_call(self.account_id, self.model)
+                except Exception as e:
+                    logger.error(f"记录 API 调用失败: {e}")
 
             cli_event = build_claude_message_stop_event(
                 self.input_tokens,
