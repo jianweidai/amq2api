@@ -20,6 +20,9 @@ tiktoken>=0.8.0
 # MySQL 支持（可选）
 pymysql>=1.1.0
 
+# 密码哈希
+bcrypt>=4.0.0
+
 # Property-based testing
 hypothesis>=6.0.0
 pytest>=8.0.0

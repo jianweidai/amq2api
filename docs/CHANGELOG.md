@@ -1,5 +1,77 @@
 # 更新日志
 
+## 2025-01-09 - 🔒 安全漏洞修复（重要更新）
+
+### 🚨 严重安全漏洞修复
+
+**影响范围**: 所有使用管理后台的用户
+
+**漏洞描述**:
+1. 未设置 `ADMIN_KEY` 时，管理 API 完全无保护
+2. 密钥存储在 `localStorage`，存在 XSS 攻击风险
+3. URL 参数传递密钥，会泄露到浏览器历史和服务器日志
+
+**修复措施**:
+
+#### 后端修复
+- ✅ 强制要求设置 `ADMIN_KEY`，未设置时拒绝所有管理请求
+- ✅ 管理页面 `/admin` 也需要 Header 鉴权
+- ✅ 移除 URL 参数鉴权方式
+
+#### 前端修复
+- ✅ 使用 `sessionStorage` 替代 `localStorage`（标签关闭后自动清除）
+- ✅ 从 URL 获取密钥后立即清除 URL 参数
+- ✅ 添加登录提示和退出功能
+- ✅ 自动处理认证失败（403 时清除密钥并提示重新登录）
+
+### ⚠️ 破坏性变更
+
+**必须设置 ADMIN_KEY**:
+- 旧版本：未设置 `ADMIN_KEY` 时允许访问管理后台
+- 新版本：未设置 `ADMIN_KEY` 时返回 403 错误
+
+**迁移步骤**:
+1. 在 `.env` 文件中设置 `ADMIN_KEY`（使用强密码）
+2. 重启服务
+3. 清除浏览器 localStorage 中的旧密钥
+4. 使用新方式登录管理后台
+
+### 新增功能
+
+- ✅ 退出登录按钮（页面右上角）
+- ✅ 登录提示框（未提供密钥时自动弹出）
+- ✅ 密钥自动清除（从 URL 获取后立即清除参数）
+
+### 修改的文件
+
+- `src/main.py`: 强制要求 ADMIN_KEY，管理页面需要 Header 鉴权
+- `frontend/index.html`: 使用 sessionStorage，添加登录/退出功能
+- `README.md`: 更新安全说明
+- `.env.example`: 添加 ADMIN_KEY 说明和生成方法
+- `docs/SECURITY_FIX.md`: 新增安全修复详细文档
+- `tests/test_admin_security.py`: 新增安全测试
+
+### 文档更新
+
+- 📖 [docs/SECURITY_FIX.md](docs/SECURITY_FIX.md) - 完整的安全修复说明
+- 📖 [README.md](README.md) - 更新管理后台访问说明
+- 📖 [.env.example](.env.example) - 添加 ADMIN_KEY 配置说明
+
+### 测试
+
+新增测试文件 `tests/test_admin_security.py`，包含：
+- 未设置 ADMIN_KEY 时的拒绝访问测试
+- 错误密钥的拒绝访问测试
+- 正确密钥的允许访问测试
+- 所有管理端点的鉴权测试
+
+运行测试：
+```bash
+pytest tests/test_admin_security.py -v
+```
+
+---
+
 ## 2025-11-09 - System Prompt 处理 + Token 统计优化
 
 ### 重大修复

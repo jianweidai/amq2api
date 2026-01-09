@@ -63,7 +63,6 @@ Required:
 
 Optional:
 - `PORT` - Server port (default: 8080)
-- `ADMIN_KEY` - Admin panel authentication
 - `API_KEY` - API authentication
 - `ENABLE_CACHE_SIMULATION` - Enable prompt caching simulation
 - `ENABLE_AUTO_REFRESH` - Enable scheduled token refresh

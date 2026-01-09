@@ -6,4 +6,4 @@ inclusion: always
    
    Learn about inclusion modes: https://kiro.dev/docs/steering/#inclusion-modes
 -------------------------------------------------------------------------------------> 
-Remember, if you're writing Python tests, always use .py files—don’t test by typing Python commands directly in the console.
+所有的 python 代码的测试，一律写 python 文件进行测试，不要再命令行里写python 代码来测试。

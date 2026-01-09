@@ -47,6 +47,11 @@ from src.custom_api.handler import handle_custom_api_request
 # Cache Manager 导入
 from src.processing.cache_manager import CacheManager, CacheResult
 
+# Admin Login 模块导入
+from src.auth.admin_manager import admin_exists, create_admin_user, verify_admin_password, get_admin_user
+from src.auth.session_manager import create_session, validate_session, invalidate_session
+from src.auth.rate_limiter import check_rate_limit as check_login_rate_limit, record_login_attempt, is_account_locked
+
 # 全局 CacheManager 实例（在 lifespan 中初始化）
 _cache_manager: CacheManager | None = None
 
@@ -124,22 +129,42 @@ app.add_middleware(
 
 
 # 管理员鉴权依赖
-async def verify_admin_key(x_admin_key: Optional[str] = Header(None)):
-    """验证管理员密钥"""
-    import os
-    admin_key = os.getenv("ADMIN_KEY")
-
-    # 如果没有设置 ADMIN_KEY，则不需要验证
-    if not admin_key:
-        return True
-
-    # 如果设置了 ADMIN_KEY，则必须验证
-    if not x_admin_key or x_admin_key != admin_key:
+async def verify_admin_key(
+    request: Request,
+    x_session_token: Optional[str] = Header(None)
+):
+    """验证管理员认证
+    
+    使用 X-Session-Token 进行会话认证。
+    """
+    # 获取客户端信息
+    user_agent = request.headers.get("user-agent", "")
+    
+    # 使用 X-Session-Token 认证
+    if x_session_token:
+        session = validate_session(x_session_token, user_agent)
+        if session:
+            return True
+        # 会话无效
+        raise HTTPException(
+            status_code=401,
+            detail="会话已过期或无效，请重新登录"
+        )
+    
+    # 没有提供会话令牌
+    # 检查是否存在管理员账号
+    if admin_exists():
+        logger.warning("⚠️  需要登录认证。请使用会话令牌访问管理功能。")
+        raise HTTPException(
+            status_code=401,
+            detail="需要登录认证。请先登录获取会话令牌。"
+        )
+    else:
+        logger.warning("⚠️  无管理员账号！请先创建管理员账号。")
         raise HTTPException(
             status_code=403,
-            detail="访问被拒绝：需要有效的管理员密钥。请在请求头中添加 X-Admin-Key"
+            detail="管理功能已禁用：请先创建管理员账号。"
         )
-    return True
 
 
 # API Key 鉴权依赖
@@ -185,6 +210,35 @@ class AccountUpdate(BaseModel):
     enabled: Optional[bool] = None
     weight: Optional[int] = None  # 权重，越大被选中概率越高（建议1-100）
     rate_limit_per_hour: Optional[int] = None  # 每小时调用限制
+
+
+# ============== 管理员登录系统 Pydantic 模型 ==============
+
+class AdminSetupRequest(BaseModel):
+    """管理员账号设置请求"""
+    username: str
+    password: str
+    confirmPassword: str
+
+
+class AdminLoginRequest(BaseModel):
+    """管理员登录请求"""
+    username: str
+    password: str
+
+
+class AdminStatusResponse(BaseModel):
+    """管理员系统状态响应"""
+    needSetup: bool
+    locked: bool = False
+    lockRemaining: int = 0
+
+
+class AdminLoginResponse(BaseModel):
+    """管理员登录响应"""
+    success: bool
+    token: Optional[str] = None
+    message: Optional[str] = None
 
 
 @app.get("/")
@@ -1694,23 +1748,196 @@ async def auth_claim(auth_id: str, _: bool = Depends(verify_admin_key)):
         raise HTTPException(status_code=500, detail=f"创建账号失败: {str(e)}")
 
 
+# ============== 管理员登录系统 API ==============
+
+
+@app.get("/api/admin/status")
+async def admin_status(request: Request):
+    """
+    获取管理员系统状态
+    
+    检查是否存在管理员账号，以及账号是否被锁定。
+    
+    Returns:
+        AdminStatusResponse: {needSetup: bool, locked: bool, lockRemaining: int}
+    
+    Requirements: 2.1, 2.4, 3.1
+    """
+    # 检查是否需要设置管理员账号
+    need_setup = not admin_exists()
+    
+    # 获取客户端 IP
+    client_ip = request.client.host if request.client else "unknown"
+    
+    # 检查账号是否被锁定
+    locked, lock_remaining = is_account_locked(client_ip)
+    
+    return AdminStatusResponse(
+        needSetup=need_setup,
+        locked=locked,
+        lockRemaining=lock_remaining or 0
+    )
+
+
+@app.post("/api/admin/setup")
+async def admin_setup(body: AdminSetupRequest, request: Request):
+    """
+    首次设置管理员账号
+    
+    验证输入并创建管理员账号。只有在没有管理员账号时才能调用。
+    
+    Args:
+        body: AdminSetupRequest - 包含 username, password, confirmPassword
+    
+    Returns:
+        {success: bool, message: str}
+    
+    Requirements: 2.2, 2.3, 2.4, 2.5, 7.2, 8.3
+    """
+    # 检查是否已存在管理员
+    if admin_exists():
+        logger.warning("尝试重复创建管理员账号")
+        raise HTTPException(status_code=409, detail="管理员账号已存在")
+    
+    # 验证用户名长度
+    if len(body.username) < 3 or len(body.username) > 50:
+        raise HTTPException(status_code=400, detail="用户名必须为 3-50 个字符")
+    
+    # 验证密码长度
+    if len(body.password) < 8:
+        raise HTTPException(status_code=400, detail="密码必须至少 8 个字符")
+    
+    # 验证密码确认
+    if body.password != body.confirmPassword:
+        raise HTTPException(status_code=400, detail="两次输入的密码不一致")
+    
+    try:
+        # 创建管理员账号
+        admin = create_admin_user(body.username, body.password)
+        
+        # 记录日志
+        client_ip = request.client.host if request.client else "unknown"
+        logger.info(f"管理员账号创建成功: {body.username}, IP: {client_ip}")
+        
+        # 检查是否设置了 ADMIN_KEY，记录弃用警告
+        import os
+        if os.getenv("ADMIN_KEY"):
+            logger.warning("⚠️  检测到 ADMIN_KEY 环境变量。建议迁移到用户名/密码认证后移除 ADMIN_KEY。")
+        
+        return JSONResponse(content={
+            "success": True,
+            "message": "管理员账号创建成功"
+        })
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"创建管理员账号失败: {e}")
+        raise HTTPException(status_code=500, detail="创建管理员账号失败")
+
+
+@app.post("/api/admin/login")
+async def admin_login(body: AdminLoginRequest, request: Request):
+    """
+    管理员登录
+    
+    验证凭证并创建会话。包含速率限制和账号锁定检查。
+    
+    Args:
+        body: AdminLoginRequest - 包含 username, password
+    
+    Returns:
+        AdminLoginResponse: {success: bool, token: str, message: str}
+    
+    Requirements: 3.2, 3.3, 3.4, 3.5, 8.3
+    """
+    # 获取客户端信息
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "")
+    
+    # 检查账号是否被锁定
+    locked, lock_remaining = is_account_locked(client_ip)
+    if locked:
+        logger.warning(f"登录被拒绝：账号已锁定, IP: {client_ip}")
+        raise HTTPException(
+            status_code=403,
+            detail=f"账号已锁定，请 {lock_remaining} 秒后重试"
+        )
+    
+    # 检查速率限制
+    allowed, error_msg = check_login_rate_limit(client_ip)
+    if not allowed:
+        logger.warning(f"登录被拒绝：速率限制, IP: {client_ip}")
+        raise HTTPException(status_code=429, detail=error_msg)
+    
+    # 验证凭证（使用通用错误消息，不透露具体哪个字段错误）
+    if not verify_admin_password(body.username, body.password):
+        # 记录失败的登录尝试
+        record_login_attempt(client_ip, success=False)
+        logger.warning(f"登录失败：凭证无效, 用户名: {body.username}, IP: {client_ip}")
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    
+    # 获取管理员信息
+    admin = get_admin_user()
+    if not admin:
+        raise HTTPException(status_code=500, detail="系统错误")
+    
+    # 创建会话
+    token = create_session(admin.id, user_agent)
+    
+    # 记录成功的登录尝试
+    record_login_attempt(client_ip, success=True)
+    logger.info(f"登录成功: {body.username}, IP: {client_ip}")
+    
+    return AdminLoginResponse(
+        success=True,
+        token=token,
+        message="登录成功"
+    )
+
+
+@app.post("/api/admin/logout")
+async def admin_logout(request: Request, x_session_token: Optional[str] = Header(None)):
+    """
+    管理员登出
+    
+    使当前会话失效。
+    
+    Args:
+        x_session_token: 会话令牌（通过 Header 传递）
+    
+    Returns:
+        {success: bool}
+    
+    Requirements: 5.1, 8.3
+    """
+    if not x_session_token:
+        raise HTTPException(status_code=401, detail="未提供会话令牌")
+    
+    # 获取客户端信息
+    client_ip = request.client.host if request.client else "unknown"
+    
+    # 使会话失效
+    success = invalidate_session(x_session_token)
+    
+    if success:
+        logger.info(f"登出成功, IP: {client_ip}")
+    else:
+        logger.warning(f"登出失败：会话不存在, IP: {client_ip}")
+    
+    return JSONResponse(content={"success": True})
+
+
 # 管理页面
 @app.get("/admin", response_class=FileResponse)
-async def admin_page(key: Optional[str] = None):
-    """管理页面（需要鉴权）"""
-    import os
+async def admin_page():
+    """管理页面
+    
+    安全说明：
+    - 前端会检查 /api/admin/status 来决定显示登录页还是设置页
+    - 实际的 API 调用需要会话令牌认证
+    - 这个端点只返回静态 HTML 文件
+    """
     from pathlib import Path
-
-    # 获取管理员密钥
-    admin_key = os.getenv("ADMIN_KEY")
-
-    # 如果设置了 ADMIN_KEY，则需要验证
-    if admin_key:
-        if not key or key != admin_key:
-            raise HTTPException(
-                status_code=403,
-                detail="访问被拒绝：需要有效的管理员密钥。请在 URL 中添加 ?key=YOUR_ADMIN_KEY"
-            )
 
     # frontend 目录在项目根目录下，不在 src/ 下
     frontend_path = Path(__file__).parent.parent / "frontend" / "index.html"

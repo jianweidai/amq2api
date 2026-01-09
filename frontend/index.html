@@ -544,12 +544,214 @@
     .mapping-delete:hover {
       background: #ff453a;
     }
+
+    /* 登录/设置页面样式 */
+    .auth-container {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: var(--bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2000;
+    }
+
+    .auth-panel {
+      background: var(--panel);
+      border-radius: 24px;
+      padding: 40px;
+      width: 100%;
+      max-width: 420px;
+      box-shadow: 0 8px 32px var(--shadow);
+    }
+
+    .auth-panel h1 {
+      font-size: 28px;
+      margin-bottom: 8px;
+      text-align: center;
+    }
+
+    .auth-panel .subtitle {
+      color: var(--muted);
+      text-align: center;
+      margin-bottom: 32px;
+      font-size: 14px;
+    }
+
+    .auth-panel .field {
+      margin-bottom: 20px;
+    }
+
+    .auth-panel .field label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 500;
+    }
+
+    .auth-panel .field input {
+      width: 100%;
+      padding: 14px 16px;
+      font-size: 15px;
+    }
+
+    .auth-panel .field .hint {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 6px;
+    }
+
+    .auth-panel .error-message {
+      background: rgba(255, 59, 48, 0.1);
+      color: var(--danger);
+      padding: 12px 16px;
+      border-radius: 10px;
+      font-size: 14px;
+      margin-bottom: 20px;
+      display: none;
+    }
+
+    .auth-panel .error-message.visible {
+      display: block;
+    }
+
+    .auth-panel .lock-message {
+      background: rgba(255, 149, 0, 0.1);
+      color: var(--warning);
+      padding: 12px 16px;
+      border-radius: 10px;
+      font-size: 14px;
+      margin-bottom: 20px;
+      text-align: center;
+    }
+
+    .auth-panel button[type="submit"] {
+      width: 100%;
+      padding: 14px;
+      font-size: 16px;
+      font-weight: 600;
+      margin-top: 8px;
+    }
+
+    .auth-panel button[type="submit"]:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .auth-panel .loading {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-radius: 50%;
+      border-top-color: white;
+      animation: spin 0.8s linear infinite;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .auth-panel .divider {
+      display: flex;
+      align-items: center;
+      margin: 24px 0;
+    }
+
+    .auth-panel .divider::before,
+    .auth-panel .divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+
+    .auth-panel .divider span {
+      padding: 0 16px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .auth-panel .admin-key-link {
+      text-align: center;
+      margin-top: 16px;
+    }
+
+    .auth-panel .admin-key-link a {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    .auth-panel .admin-key-link a:hover {
+      text-decoration: underline;
+    }
   </style>
 </head>
 
 <body>
-  <div class="container">
-    <h1>Admin 管理</h1>
+  <!-- 登录页面 -->
+  <div id="login-container" class="auth-container" style="display:none">
+    <div class="auth-panel">
+      <h1>🔐 管理员登录</h1>
+      <p class="subtitle">请输入您的管理员凭证</p>
+      
+      <div id="login-lock-message" class="lock-message" style="display:none"></div>
+      <div id="login-error" class="error-message"></div>
+      
+      <form id="login-form" onsubmit="return handleLogin(event)">
+        <div class="field">
+          <label for="login-username">用户名</label>
+          <input type="text" id="login-username" name="username" required autocomplete="username" placeholder="请输入用户名" />
+        </div>
+        <div class="field">
+          <label for="login-password">密码</label>
+          <input type="password" id="login-password" name="password" required autocomplete="current-password" placeholder="请输入密码" />
+        </div>
+        <button type="submit" id="login-btn">登录</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- 设置页面（首次创建管理员账号） -->
+  <div id="setup-container" class="auth-container" style="display:none">
+    <div class="auth-panel">
+      <h1>🎉 欢迎使用</h1>
+      <p class="subtitle">首次使用，请创建管理员账号</p>
+      
+      <div id="setup-error" class="error-message"></div>
+      
+      <form id="setup-form" onsubmit="return handleSetup(event)">
+        <div class="field">
+          <label for="setup-username">用户名</label>
+          <input type="text" id="setup-username" name="username" required minlength="3" maxlength="50" autocomplete="username" placeholder="请输入用户名" />
+          <div class="hint">3-50 个字符</div>
+        </div>
+        <div class="field">
+          <label for="setup-password">密码</label>
+          <input type="password" id="setup-password" name="password" required minlength="8" autocomplete="new-password" placeholder="请输入密码" />
+          <div class="hint">至少 8 个字符</div>
+        </div>
+        <div class="field">
+          <label for="setup-confirm">确认密码</label>
+          <input type="password" id="setup-confirm" name="confirmPassword" required minlength="8" autocomplete="new-password" placeholder="请再次输入密码" />
+        </div>
+        <button type="submit" id="setup-btn">创建账号</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- 主内容区域 -->
+  <div id="main-container" class="container" style="display:none">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+      <h1>Admin 管理</h1>
+      <button onclick="logout()" class="btn-secondary" style="font-size: 14px;">🚪 退出登录</button>
+    </div>
     <p style="color: var(--muted); margin-bottom: 32px;">管理 Amazon Q、Gemini 和 Custom API 账号</p>
 
     <div class="panel">
@@ -796,28 +998,371 @@
         </div>
       </div>
     </div> <!-- 关闭 tab-tokens -->
-  </div> <!-- 关闭 container -->
+  </div> <!-- 关闭 main-container -->
 
   <script>
-    // 从 URL 参数或 localStorage 获取管理员密钥
-    function getAdminKey() {
-      const urlParams = new URLSearchParams(window.location.search);
-      const keyFromUrl = urlParams.get('key');
-      if (keyFromUrl) {
-        localStorage.setItem('adminKey', keyFromUrl);
-        return keyFromUrl;
-      }
-      return localStorage.getItem('adminKey');
+    // ==================== 认证状态管理 ====================
+    
+    // 获取会话令牌
+    function getSessionToken() {
+      return sessionStorage.getItem('sessionToken');
     }
 
     // 创建带认证头的 fetch 请求
     function authFetch(url, options = {}) {
-      const adminKey = getAdminKey();
-      const headers = options.headers || {};
-      if (adminKey) {
-        headers['X-Admin-Key'] = adminKey;
+      const sessionToken = getSessionToken();
+      
+      if (!sessionToken) {
+        return Promise.reject(new Error('未登录'));
       }
-      return fetch(url, { ...options, headers });
+      
+      const headers = options.headers || {};
+      headers['X-Session-Token'] = sessionToken;
+      
+      return fetch(url, { ...options, headers })
+        .then(response => {
+          // 如果返回 401 或 403，可能是会话过期
+          if (response.status === 401 || response.status === 403) {
+            sessionStorage.removeItem('sessionToken');
+            showLoginPage('会话已过期，请重新登录');
+            throw new Error('认证失败');
+          }
+          return response;
+        });
+    }
+
+    // ==================== 页面显示控制 ====================
+    
+    function showLoginPage(errorMessage = null) {
+      document.getElementById('login-container').style.display = 'flex';
+      document.getElementById('setup-container').style.display = 'none';
+      document.getElementById('main-container').style.display = 'none';
+      
+      if (errorMessage) {
+        showLoginError(errorMessage);
+      } else {
+        hideLoginError();
+      }
+      
+      // 聚焦用户名输入框
+      setTimeout(() => {
+        document.getElementById('login-username').focus();
+      }, 100);
+    }
+
+    function showSetupPage(errorMessage = null) {
+      document.getElementById('login-container').style.display = 'none';
+      document.getElementById('setup-container').style.display = 'flex';
+      document.getElementById('main-container').style.display = 'none';
+      
+      if (errorMessage) {
+        showSetupError(errorMessage);
+      } else {
+        hideSetupError();
+      }
+      
+      // 聚焦用户名输入框
+      setTimeout(() => {
+        document.getElementById('setup-username').focus();
+      }, 100);
+    }
+
+    function showAdminPanel() {
+      document.getElementById('login-container').style.display = 'none';
+      document.getElementById('setup-container').style.display = 'none';
+      document.getElementById('main-container').style.display = 'block';
+      
+      // 加载账号列表
+      loadAccounts();
+    }
+
+    // ==================== 错误消息显示 ====================
+    
+    function showLoginError(message) {
+      const el = document.getElementById('login-error');
+      el.textContent = message;
+      el.classList.add('visible');
+    }
+
+    function hideLoginError() {
+      const el = document.getElementById('login-error');
+      el.textContent = '';
+      el.classList.remove('visible');
+    }
+
+    function showSetupError(message) {
+      const el = document.getElementById('setup-error');
+      el.textContent = message;
+      el.classList.add('visible');
+    }
+
+    function hideSetupError() {
+      const el = document.getElementById('setup-error');
+      el.textContent = '';
+      el.classList.remove('visible');
+    }
+
+    function showLockMessage(seconds) {
+      const el = document.getElementById('login-lock-message');
+      el.textContent = `账号已锁定，请 ${seconds} 秒后重试`;
+      el.style.display = 'block';
+      
+      // 倒计时更新
+      const interval = setInterval(() => {
+        seconds--;
+        if (seconds <= 0) {
+          el.style.display = 'none';
+          clearInterval(interval);
+        } else {
+          el.textContent = `账号已锁定，请 ${seconds} 秒后重试`;
+        }
+      }, 1000);
+    }
+
+    // ==================== 初始化认证 ====================
+    
+    async function initAuth() {
+      try {
+        // 检查系统状态
+        const response = await fetch('/api/admin/status');
+        const data = await response.json();
+        
+        if (data.needSetup) {
+          // 需要首次设置
+          showSetupPage();
+          return;
+        }
+        
+        if (data.locked) {
+          // 账号被锁定
+          showLoginPage();
+          showLockMessage(data.lockRemaining);
+          return;
+        }
+        
+        // 检查是否有有效会话
+        const sessionToken = getSessionToken();
+        
+        if (sessionToken) {
+          // 验证会话令牌
+          const valid = await validateSession(sessionToken);
+          if (valid) {
+            showAdminPanel();
+            return;
+          }
+          // 会话无效，清除
+          sessionStorage.removeItem('sessionToken');
+        }
+        
+        // 显示登录页面
+        showLoginPage();
+      } catch (error) {
+        console.error('初始化认证失败:', error);
+        showLoginPage('系统错误，请稍后重试');
+      }
+    }
+
+    // 验证会话令牌
+    async function validateSession(token) {
+      try {
+        const response = await fetch('/v2/accounts', {
+          headers: { 'X-Session-Token': token }
+        });
+        return response.ok;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    // ==================== 登录处理 ====================
+    
+    async function handleLogin(event) {
+      event.preventDefault();
+      
+      const username = document.getElementById('login-username').value.trim();
+      const password = document.getElementById('login-password').value;
+      const btn = document.getElementById('login-btn');
+      
+      // 显示加载状态
+      btn.disabled = true;
+      btn.innerHTML = '<span class="loading"></span>登录中...';
+      hideLoginError();
+      
+      try {
+        const response = await fetch('/api/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success && data.token) {
+          // 登录成功
+          sessionStorage.setItem('sessionToken', data.token);
+          showAdminPanel();
+        } else {
+          // 登录失败
+          if (data.lockRemaining) {
+            showLockMessage(data.lockRemaining);
+          }
+          showLoginError(data.message || '登录失败');
+        }
+      } catch (error) {
+        console.error('登录错误:', error);
+        showLoginError('网络错误，请稍后重试');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '登录';
+      }
+      
+      return false;
+    }
+
+    // ==================== 设置处理 ====================
+    
+    async function handleSetup(event) {
+      event.preventDefault();
+      
+      const username = document.getElementById('setup-username').value.trim();
+      const password = document.getElementById('setup-password').value;
+      const confirmPassword = document.getElementById('setup-confirm').value;
+      const btn = document.getElementById('setup-btn');
+      
+      // 前端验证
+      if (username.length < 3 || username.length > 50) {
+        showSetupError('用户名长度必须在 3-50 个字符之间');
+        return false;
+      }
+      
+      if (password.length < 8) {
+        showSetupError('密码长度至少 8 个字符');
+        return false;
+      }
+      
+      if (password !== confirmPassword) {
+        showSetupError('两次输入的密码不一致');
+        return false;
+      }
+      
+      // 显示加载状态
+      btn.disabled = true;
+      btn.innerHTML = '<span class="loading"></span>创建中...';
+      hideSetupError();
+      
+      try {
+        const response = await fetch('/api/admin/setup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password, confirmPassword })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+          // 创建成功，跳转到登录页面
+          showLoginPage();
+          // 显示成功提示
+          alert('管理员账号创建成功，请登录');
+        } else {
+          showSetupError(data.message || '创建失败');
+        }
+      } catch (error) {
+        console.error('设置错误:', error);
+        showSetupError('网络错误，请稍后重试');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '创建账号';
+      }
+      
+      return false;
+    }
+
+    // ==================== 登出处理 ====================
+    
+    async function logout() {
+      const sessionToken = getSessionToken();
+      
+      if (sessionToken) {
+        try {
+          await fetch('/api/admin/logout', {
+            method: 'POST',
+            headers: { 'X-Session-Token': sessionToken }
+          });
+        } catch (e) {
+          console.error('登出请求失败:', e);
+        }
+      }
+      
+      // 清除本地存储
+      sessionStorage.removeItem('sessionToken');
+      sessionStorage.removeItem('adminKey');
+      
+      // 显示登录页面
+      showLoginPage();
+    }
+
+    // ==================== 实时表单验证 ====================
+    
+    // 设置页面实时验证
+    function setupFormValidation() {
+      const usernameInput = document.getElementById('setup-username');
+      const passwordInput = document.getElementById('setup-password');
+      const confirmInput = document.getElementById('setup-confirm');
+      
+      // 用户名验证
+      usernameInput.addEventListener('input', function() {
+        const value = this.value.trim();
+        if (value.length > 0 && (value.length < 3 || value.length > 50)) {
+          this.style.borderColor = 'var(--danger)';
+        } else {
+          this.style.borderColor = '';
+        }
+      });
+      
+      // 密码验证
+      passwordInput.addEventListener('input', function() {
+        const value = this.value;
+        if (value.length > 0 && value.length < 8) {
+          this.style.borderColor = 'var(--danger)';
+        } else {
+          this.style.borderColor = '';
+        }
+        // 同时检查确认密码
+        validatePasswordMatch();
+      });
+      
+      // 确认密码验证
+      confirmInput.addEventListener('input', validatePasswordMatch);
+      
+      function validatePasswordMatch() {
+        const password = passwordInput.value;
+        const confirm = confirmInput.value;
+        if (confirm.length > 0 && password !== confirm) {
+          confirmInput.style.borderColor = 'var(--danger)';
+        } else {
+          confirmInput.style.borderColor = '';
+        }
+      }
+    }
+
+    // 登录页面键盘支持
+    function setupLoginKeyboardSupport() {
+      const loginForm = document.getElementById('login-form');
+      const setupForm = document.getElementById('setup-form');
+      
+      // Enter 键提交表单
+      document.getElementById('login-password').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+          loginForm.dispatchEvent(new Event('submit'));
+        }
+      });
+      
+      document.getElementById('setup-confirm').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+          setupForm.dispatchEvent(new Event('submit'));
+        }
+      });
     }
 
     function toggleAccountFields() {
@@ -1807,8 +2352,8 @@
         // Custom API accounts use dedicated test endpoint
         if (acc.type === 'custom_api') {
           const headers = { 'content-type': 'application/json' };
-          const adminKey = getAdminKey();
-          if (adminKey) headers['x-admin-key'] = adminKey;
+          const sessionToken = getSessionToken();
+          if (sessionToken) headers['X-Session-Token'] = sessionToken;
 
           const r = await fetch(`/v2/accounts/${accountId}/test`, {
             method: 'POST',
@@ -1843,8 +2388,8 @@
           'content-type': 'application/json',
           'X-Account-ID': accountId
         };
-        const adminKey = getAdminKey();
-        if (adminKey) headers['x-api-key'] = adminKey;
+        const sessionToken = getSessionToken();
+        if (sessionToken) headers['X-Session-Token'] = sessionToken;
 
         const r = await fetch(endpoint, {
           method: 'POST',
@@ -1932,8 +2477,8 @@
             'content-type': 'application/json',
             'X-Account-ID': acc.id
           };
-          const adminKey = getAdminKey();
-          if (adminKey) headers['x-api-key'] = adminKey;
+          const sessionToken = getSessionToken();
+          if (sessionToken) headers['X-Session-Token'] = sessionToken;
 
           const r = await fetch(endpoint, {
             method: 'POST',
@@ -2026,8 +2571,8 @@
             'content-type': 'application/json',
             'X-Account-ID': acc.id
           };
-          const adminKey = getAdminKey();
-          if (adminKey) headers['x-api-key'] = adminKey;
+          const sessionToken = getSessionToken();
+          if (sessionToken) headers['X-Session-Token'] = sessionToken;
 
           const r = await fetch(endpoint, {
             method: 'POST',
@@ -2321,7 +2866,9 @@
     }
 
     window.addEventListener('DOMContentLoaded', () => {
-      loadAccounts();
+      setupFormValidation();
+      setupLoginKeyboardSupport();
+      initAuth();
       initPeriodSelector();
     });
   </script>

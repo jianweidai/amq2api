@@ -32,6 +32,9 @@ Amazon Q Event Stream → src/amazonq/event_stream_parser.py → src/amazonq/par
 - **src/auth/** - 认证模块
   - **auth.py** - Amazon Q Token 自动刷新机制（JWT 过期检测）
   - **account_manager.py** - 多账号管理（SQLite/MySQL 数据库）
+  - **admin_manager.py** - 管理员账号管理（用户名/密码认证）
+  - **session_manager.py** - 会话管理（令牌生成、验证、过期）
+  - **rate_limiter.py** - 登录速率限制和账号锁定
   - **token_scheduler.py** - 定时 Token 刷新
 - **src/amazonq/** - Amazon Q 后端模块
   - **converter.py** - 请求格式转换 (Claude → Amazon Q)
@@ -151,11 +154,44 @@ curl -X POST http://localhost:8080/v1/messages \
 | `PORT` | ❌ | 8080 | 服务监听端口 |
 | `AMAZONQ_API_ENDPOINT` | ❌ | https://q.us-east-1.amazonaws.com/ | API 端点 |
 | `AMAZONQ_TOKEN_ENDPOINT` | ❌ | https://oidc.us-east-1.amazonaws.com/token | Token 端点 |
+| `API_KEY` | ❌ | 空 | API 调用密钥（可选） |
 | `MYSQL_HOST` | ❌ | 空 | MySQL 主机地址（配置后使用 MySQL 存储账号） |
 | `MYSQL_PORT` | ❌ | 3306 | MySQL 端口 |
 | `MYSQL_USER` | ❌ | 空 | MySQL 用户名 |
 | `MYSQL_PASSWORD` | ❌ | 空 | MySQL 密码 |
 | `MYSQL_DATABASE` | ❌ | amq2api | MySQL 数据库名 |
+
+### 🔐 管理后台认证
+
+**管理后台使用用户名/密码登录认证。**
+
+#### 首次设置
+
+1. **访问管理后台**：打开 `http://localhost:8080/admin`
+2. **创建管理员账号**：首次访问时，系统会显示设置页面
+   - 输入用户名（3-50 字符）
+   - 输入密码（至少 8 字符）
+   - 确认密码
+   - 点击"创建账号"
+3. **登录**：使用刚创建的用户名和密码登录
+
+#### 登录说明
+
+- 访问 `http://localhost:8080/admin`
+- 输入用户名和密码
+- 点击"登录"按钮
+- 登录成功后会话保持 24 小时有效
+- 点击右上角"🚪 退出登录"可安全退出
+
+#### 安全特性
+
+- ✅ 密码使用 bcrypt 加密存储（cost factor 12）
+- ✅ 会话令牌绑定 User-Agent 防止劫持
+- ✅ 登录失败 5 次后账号锁定 15 分钟
+- ✅ 每分钟每 IP 最多 5 次登录尝试
+- ✅ 错误消息不泄露具体失败原因
+
+详细的安全说明请参考：[docs/SECURITY_FIX.md](docs/SECURITY_FIX.md)
 
 ### 数据库配置
 
@@ -215,22 +251,25 @@ python3 gemini_oauth_client.py
 
 访问 `http://localhost:8080/admin` 打开 Web 管理界面。
 
-**⚠️ 管理页面鉴权：**
+**🔐 管理页面认证：**
 
-为了保护管理页面不被未授权访问，建议在 `.env` 文件中设置 `ADMIN_KEY`：
+系统使用用户名/密码登录认证：
 
-```bash
-# .env
-ADMIN_KEY=your_secret_admin_key_here
-```
+1. 首次访问时创建管理员账号
+2. 使用用户名和密码登录
+3. 会话有效期 24 小时
 
-设置后，访问管理页面需要在 URL 中添加密钥参数：
+**退出登录**：
+- 点击页面右上角的 "🚪 退出登录" 按钮
 
-```
-http://localhost:8080/admin?key=your_secret_admin_key_here
-```
+**安全说明**：
+- ✅ 密码使用 bcrypt 加密存储
+- ✅ 会话令牌绑定 User-Agent
+- ✅ 登录失败自动锁定账号
+- ✅ IP 级别速率限制
+- ⚠️ 生产环境必须使用 HTTPS
 
-如果不设置 `ADMIN_KEY`，管理页面将无需鉴权即可访问（仅适用于本地开发）。
+详细的安全说明请参考：[docs/SECURITY_FIX.md](docs/SECURITY_FIX.md)
 
 **管理界面功能：**
 
@@ -474,6 +513,9 @@ amq2api/
 │   ├── auth/                # 认证模块
 │   │   ├── auth.py         # Amazon Q Token 管理
 │   │   ├── account_manager.py # 多账号管理
+│   │   ├── admin_manager.py # 管理员账号管理
+│   │   ├── session_manager.py # 会话管理
+│   │   ├── rate_limiter.py # 登录速率限制
 │   │   └── token_scheduler.py # 定时刷新
 │   │
 │   ├── amazonq/             # Amazon Q 后端模块
