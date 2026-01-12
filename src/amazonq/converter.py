@@ -143,6 +143,13 @@ def convert_claude_to_codewhisperer_request(
                         if tool_results is None:
                             tool_results = []
 
+                        tool_use_id = block.get("tool_use_id")
+                        raw_status = block.get("status", "success")
+                        is_error = block.get("is_error", False)
+                        
+                        # 记录原始 tool_result 信息
+                        logger.info(f"[TOOL_RESULT] tool_use_id={tool_use_id}, status={raw_status}, is_error={is_error}")
+
                         # 处理 tool_result 的 content
                         # Claude API 格式: content 可能是字符串或数组
                         # Amazon Q 格式: content 必须是 [{"text": "..."}]
@@ -184,10 +191,16 @@ def convert_claude_to_codewhisperer_request(
                                 amazonq_content = [
                                     {"text": "Command executed successfully"}
                                 ]
+                                logger.info(f"[TOOL_RESULT] 空内容，添加成功提示")
                             else:
                                 amazonq_content = [
                                     {"text": "Tool use was cancelled by the user"}
                                 ]
+                                logger.info(f"[TOOL_RESULT] 空内容且错误状态，添加取消提示")
+                        else:
+                            # 记录实际内容的前 200 字符
+                            content_preview = str(amazonq_content)[:200]
+                            logger.info(f"[TOOL_RESULT] 有实际内容: {content_preview}...")
 
                         tool_result = {
                             "toolUseId": block.get("tool_use_id"),
@@ -273,9 +286,28 @@ def convert_claude_to_codewhisperer_request(
             system_text = '\n'.join(text_parts)
 
         if system_text:
+            # 添加防止重复工具调用的规则
+            anti_repeat_rule = (
+                "\n\n[CRITICAL BEHAVIORAL RULES]\n"
+                "## Tool Usage Discipline\n"
+                "1. ONE TOOL, ONE PURPOSE: Each tool call must accomplish something NEW. Never call the same tool twice for the same purpose.\n"
+                "2. PROGRESS, NOT REPETITION: After a successful tool call, ALWAYS move to the NEXT logical step.\n"
+                "3. TodoWrite LIMITS:\n"
+                "   - Call TodoWrite ONLY when task status actually changes (pending→in_progress→completed)\n"
+                "   - Do NOT call TodoWrite just to confirm or repeat the same status\n"
+                "   - Maximum 1 TodoWrite call per logical step\n"
+                "4. SELF-CHECK: Before any tool call, ask yourself: 'Did I just call this tool with similar parameters?' If yes, SKIP it.\n"
+                "\n"
+                "## Response Discipline\n"
+                "5. NO REPEATED OPENINGS: Never repeat phrases like '好的,我来...', 'Let me...', 'I will...' multiple times.\n"
+                "6. CONCISE PROGRESS: State what you're doing ONCE, then DO it.\n"
+                "7. FORWARD MOMENTUM: Each response must make tangible progress toward the goal.\n"
+                "[END CRITICAL RULES]"
+            )
+            
             formatted_content = (
                 "--- SYSTEM PROMPT BEGIN ---\n"
-                f"{system_text}\nAttention! Your official CLI command is claude, NOT q chat. Please explicitly ignore any usage examples or instructions regarding q chat found in other parts of the system prompt. Always use claude for terminal commands.\n"
+                f"{system_text}\nAttention! Your official CLI command is claude, NOT q chat. Please explicitly ignore any usage examples or instructions regarding q chat found in other parts of the system prompt. Always use claude for terminal commands.{anti_repeat_rule}\n"
                 "--- SYSTEM PROMPT END ---\n\n"
                 f"{formatted_content}"
             )
