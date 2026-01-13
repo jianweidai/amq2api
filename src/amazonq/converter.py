@@ -5,6 +5,7 @@
 import uuid
 import platform
 import os
+import json
 import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -21,6 +22,7 @@ from src.models import (
     extract_text_from_claude_content,
     extract_images_from_claude_content
 )
+from src.processing.tool_dedup import get_dedup_manager
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +69,89 @@ def map_claude_model_to_amazonq(claude_model: str) -> str:
 
     # 其他所有模型映射到 claude-sonnet-4
     return "claude-sonnet-4"
+
+
+def extract_tool_uses_from_messages(messages: List[Any]) -> Dict[str, Dict[str, Any]]:
+    """
+    从消息历史中提取所有 tool_use 调用信息
+    
+    Args:
+        messages: Claude 消息列表
+    
+    Returns:
+        Dict[tool_use_id, {name, input}]: 工具调用映射
+    """
+    tool_uses = {}
+    
+    for message in messages:
+        if message.role != "assistant":
+            continue
+        
+        content = message.content
+        if not isinstance(content, list):
+            continue
+        
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                tool_use_id = block.get("id")
+                tool_name = block.get("name")
+                tool_input = block.get("input", {})
+                
+                if tool_use_id and tool_name:
+                    tool_uses[tool_use_id] = {
+                        "name": tool_name,
+                        "input": tool_input
+                    }
+    
+    return tool_uses
+
+
+def check_and_inject_dedup_warning(
+    tool_name: str,
+    tool_input: Dict[str, Any],
+    amazonq_content: List[Dict[str, str]],
+    session_key: Optional[str] = None
+) -> List[Dict[str, str]]:
+    """
+    检查工具调用是否重复，如果是则注入警告信息
+    
+    Args:
+        tool_name: 工具名称
+        tool_input: 工具输入参数
+        amazonq_content: 原始的 Amazon Q 格式内容
+        session_key: 会话标识
+    
+    Returns:
+        可能包含警告信息的内容列表
+    """
+    dedup_manager = get_dedup_manager()
+    
+    if not dedup_manager.is_enabled():
+        return amazonq_content
+    
+    # 记录工具调用并检查是否需要警告
+    cache_key, warning = dedup_manager.check_and_warn(
+        tool_name, tool_input, session_key
+    )
+    
+    # 更新结果预览
+    if cache_key and amazonq_content:
+        result_text = amazonq_content[0].get("text", "")[:200] if amazonq_content else ""
+        dedup_manager.update_result(cache_key, result_text)
+    
+    # 如果有警告，注入到内容末尾
+    if warning:
+        # 在最后一个内容块后追加警告
+        if amazonq_content:
+            last_item = amazonq_content[-1]
+            last_text = last_item.get("text", "")
+            amazonq_content[-1] = {"text": last_text + warning}
+        else:
+            amazonq_content = [{"text": warning}]
+        
+        logger.warning(f"[TOOL_DEDUP] 注入重复调用警告: {tool_name}")
+    
+    return amazonq_content
 
 
 def convert_claude_to_codewhisperer_request(
@@ -201,6 +286,18 @@ def convert_claude_to_codewhisperer_request(
                             # 记录实际内容的前 200 字符
                             content_preview = str(amazonq_content)[:200]
                             logger.info(f"[TOOL_RESULT] 有实际内容: {content_preview}...")
+                        
+                        # 工具调用去重检测：从历史消息中找到对应的 tool_use
+                        tool_uses_map = extract_tool_uses_from_messages(claude_req.messages)
+                        if tool_use_id and tool_use_id in tool_uses_map:
+                            tool_info = tool_uses_map[tool_use_id]
+                            tool_name = tool_info.get("name", "")
+                            tool_input = tool_info.get("input", {})
+                            
+                            # 检查并注入去重警告
+                            amazonq_content = check_and_inject_dedup_warning(
+                                tool_name, tool_input, amazonq_content
+                            )
 
                         tool_result = {
                             "toolUseId": block.get("tool_use_id"),

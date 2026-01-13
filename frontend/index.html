@@ -1687,6 +1687,48 @@
           row('刷新状态', acc.last_refresh_status || 'never');
           row('刷新时间', acc.last_refresh_time || 'N/A');
           row('Client ID', acc.clientId);
+          // Refresh Token 显示（带显示/隐藏功能）
+          const rtKey = document.createElement('div');
+          rtKey.className = 'key';
+          rtKey.textContent = 'Refresh Token';
+          const rtVal = document.createElement('div');
+          rtVal.className = 'value';
+          rtVal.style.display = 'flex';
+          rtVal.style.alignItems = 'center';
+          rtVal.style.gap = '8px';
+          const rtText = document.createElement('span');
+          rtText.textContent = acc.refreshToken ? '••••••••' : 'N/A';
+          rtText.style.flex = '1';
+          rtText.style.wordBreak = 'break-all';
+          const rtToggle = document.createElement('button');
+          rtToggle.textContent = '👁';
+          rtToggle.style.cssText = 'padding:4px 8px;font-size:12px;background:var(--muted);border-radius:6px;flex-shrink:0';
+          rtToggle.title = '显示/隐藏';
+          let rtVisible = false;
+          rtToggle.onclick = () => {
+            rtVisible = !rtVisible;
+            rtText.textContent = rtVisible ? (acc.refreshToken || 'N/A') : (acc.refreshToken ? '••••••••' : 'N/A');
+            rtToggle.textContent = rtVisible ? '🙈' : '👁';
+          };
+          if (acc.refreshToken) {
+            const rtCopy = document.createElement('button');
+            rtCopy.textContent = '📋';
+            rtCopy.style.cssText = 'padding:4px 8px;font-size:12px;background:var(--muted);border-radius:6px;flex-shrink:0';
+            rtCopy.title = '复制';
+            rtCopy.onclick = () => {
+              navigator.clipboard.writeText(acc.refreshToken).then(() => {
+                rtCopy.textContent = '✓';
+                setTimeout(() => rtCopy.textContent = '📋', 1500);
+              });
+            };
+            rtVal.appendChild(rtText);
+            rtVal.appendChild(rtToggle);
+            rtVal.appendChild(rtCopy);
+          } else {
+            rtVal.appendChild(rtText);
+          }
+          meta.appendChild(rtKey);
+          meta.appendChild(rtVal);
           if (acc.type === 'gemini' && other.project) {
             row('Project ID', other.project);
           }
