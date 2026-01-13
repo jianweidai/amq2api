@@ -385,20 +385,29 @@ def convert_claude_to_codewhisperer_request(
         if system_text:
             # 添加防止重复工具调用的规则
             anti_repeat_rule = (
-                "\n\n[CRITICAL BEHAVIORAL RULES]\n"
-                "## Tool Usage Discipline\n"
-                "1. ONE TOOL, ONE PURPOSE: Each tool call must accomplish something NEW. Never call the same tool twice for the same purpose.\n"
-                "2. PROGRESS, NOT REPETITION: After a successful tool call, ALWAYS move to the NEXT logical step.\n"
-                "3. TodoWrite LIMITS:\n"
-                "   - Call TodoWrite ONLY when task status actually changes (pending→in_progress→completed)\n"
-                "   - Do NOT call TodoWrite just to confirm or repeat the same status\n"
-                "   - Maximum 1 TodoWrite call per logical step\n"
-                "4. SELF-CHECK: Before any tool call, ask yourself: 'Did I just call this tool with similar parameters?' If yes, SKIP it.\n"
+                "\n\n[🚨 CRITICAL BEHAVIORAL RULES - VIOLATION WILL DEGRADE QUALITY 🚨]\n"
                 "\n"
-                "## Response Discipline\n"
-                "5. NO REPEATED OPENINGS: Never repeat phrases like '好的,我来...', 'Let me...', 'I will...' multiple times.\n"
-                "6. CONCISE PROGRESS: State what you're doing ONCE, then DO it.\n"
-                "7. FORWARD MOMENTUM: Each response must make tangible progress toward the goal.\n"
+                "## A. Tool Usage Discipline (MANDATORY)\n"
+                "1. ONE TOOL, ONE PURPOSE: Each tool call must accomplish something NEW. NEVER call the same tool twice for the same purpose.\n"
+                "2. PROGRESS, NOT REPETITION: After a successful tool call, ALWAYS move to the NEXT logical step.\n"
+                "3. SELF-CHECK: Before EVERY tool call, ask: 'Did I just call this tool with similar parameters?' If yes → SKIP IT!\n"
+                "\n"
+                "## B. TodoWrite Specific Rules (MOST IMPORTANT)\n"
+                "⚠️ TodoWrite is heavily monitored for abuse!\n"
+                "- Call TodoWrite ONLY when task status ACTUALLY changes: pending → in_progress → completed\n"
+                "- ONE TodoWrite per logical milestone, NOT per response\n"
+                "- NEVER call TodoWrite just to 'confirm' or 'acknowledge' the same status\n"
+                "- If you find yourself wanting to call TodoWrite twice in a row with similar content → STOP, you're doing it wrong\n"
+                "\n"
+                "## C. Response Discipline (CRITICAL)\n"
+                "- NO REPEATED OPENINGS: Phrases like '好的,我来...', 'Let me...', 'I will...' should appear ONLY ONCE per conversation turn\n"
+                "- CONTEXT AWARENESS: Check the chat history. If you have already stated your plan (e.g., 'I will analyze...', 'Checking changes...'), DO NOT repeat it. Just show the results or next step.\n"
+                "- CONCISE PROGRESS: State what you're doing ONCE, then DO it\n"
+                "- FORWARD MOMENTUM: Each response must make TANGIBLE progress toward the goal\n"
+                "- If you catch yourself repeating similar phrases → STOP, restructure your response\n"
+                "\n"
+                "## D. Consequence\n"
+                "Violating these rules wastes tokens, degrades user experience, and may trigger automatic warnings in tool results.\n"
                 "[END CRITICAL RULES]"
             )
             
@@ -599,8 +608,15 @@ def convert_history_messages(messages: List[Any]) -> List[Dict[str, Any]]:
                             "name": block.get("name"),
                             "input": block.get("input", {})
                         })
+                
                 if tool_uses:
+                    logger.info(f"转换历史消息: Assistant 消息包含 {len(tool_uses)} 个工具调用")
                     assistant_entry["assistantResponseMessage"]["toolUses"] = tool_uses
+                else:
+                    # 检查是否有 tool_use 但没被提取的情况（调试用）
+                    tool_use_blocks = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_use"]
+                    if tool_use_blocks:
+                        logger.warning(f"转换历史消息: 发现 {len(tool_use_blocks)} 个 tool_use 块但提取结果为空! Blocks: {tool_use_blocks}")
 
             history_entry = assistant_entry
 

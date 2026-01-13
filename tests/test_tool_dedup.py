@@ -104,7 +104,7 @@ class TestToolDedupManager:
         assert count2 == 1
     
     def test_warning_threshold(self):
-        """测试警告阈值"""
+        """测试警告阈值（第二次调用就警告）"""
         from src.processing.tool_dedup import get_dedup_manager
         
         manager = get_dedup_manager()
@@ -115,33 +115,29 @@ class TestToolDedupManager:
         warning1 = manager.get_dedup_warning("Bash", tool_input, count1, is_short1)
         assert warning1 is None
         
-        # 第二次调用 - 无警告（未超过阈值）
+        # 第二次调用 - 有警告（超过阈值 1）
         _, count2, is_short2 = manager.record_tool_call("Bash", tool_input)
         warning2 = manager.get_dedup_warning("Bash", tool_input, count2, is_short2)
-        assert warning2 is None
-        
-        # 第三次调用 - 有警告（超过阈值）
-        _, count3, is_short3 = manager.record_tool_call("Bash", tool_input)
-        warning3 = manager.get_dedup_warning("Bash", tool_input, count3, is_short3)
-        assert warning3 is not None
-        assert "DUPLICATE" in warning3
+        assert warning2 is not None
+        assert "DUPLICATE" in warning2
     
     def test_check_and_warn_convenience_method(self):
-        """测试便捷方法 check_and_warn"""
+        """测试便捷方法 check_and_warn（第二次调用就警告）"""
         from src.processing.tool_dedup import get_dedup_manager
         
         manager = get_dedup_manager()
         tool_input = {"command": "git status"}
         
-        # 多次调用直到触发警告
-        for i in range(3):
-            cache_key, warning = manager.check_and_warn("Bash", tool_input)
-            assert cache_key != ""
-            
-            if i < 2:
-                assert warning is None
-            else:
-                assert warning is not None
+        # 第一次调用 - 无警告
+        cache_key1, warning1 = manager.check_and_warn("Bash", tool_input)
+        assert cache_key1 != ""
+        assert warning1 is None
+        
+        # 第二次调用 - 有警告
+        cache_key2, warning2 = manager.check_and_warn("Bash", tool_input)
+        assert cache_key2 != ""
+        assert warning2 is not None
+        assert "DUPLICATE" in warning2
     
     def test_update_result(self):
         """测试更新结果预览"""
@@ -295,27 +291,24 @@ class TestConverterIntegration:
         assert tool_uses["tool2"]["name"] == "Read"
     
     def test_check_and_inject_dedup_warning(self):
-        """测试去重警告注入"""
+        """测试去重警告注入（第二次调用就警告）"""
         from src.amazonq.converter import check_and_inject_dedup_warning
         from src.processing.tool_dedup import get_dedup_manager
         
         manager = get_dedup_manager()
         tool_input = {"command": "git status"}
-        original_content = [{"text": "On branch main"}]
         
-        # 多次调用直到触发警告
-        for i in range(3):
-            result = check_and_inject_dedup_warning(
-                "Bash", tool_input, [{"text": "On branch main"}]
-            )
-            
-            if i < 2:
-                # 前两次不应该有警告
-                assert "DUPLICATE" not in result[0]["text"]
-            else:
-                # 第三次应该有警告
-                assert len(result) == 1
-                assert "DUPLICATE" in result[0]["text"]
+        # 第一次调用 - 无警告
+        result1 = check_and_inject_dedup_warning(
+            "Bash", tool_input, [{"text": "On branch main"}]
+        )
+        assert "DUPLICATE" not in result1[0]["text"]
+        
+        # 第二次调用 - 有警告
+        result2 = check_and_inject_dedup_warning(
+            "Bash", tool_input, [{"text": "On branch main"}]
+        )
+        assert "DUPLICATE" in result2[0]["text"]
     
     def test_dedup_disabled(self):
         """测试禁用去重时不注入警告"""

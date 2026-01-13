@@ -52,8 +52,8 @@ class ToolDedupManager:
         # 缓存过期时间（秒）- 5 分钟
         self.ttl = 300
         
-        # 重复调用阈值 - 超过此次数才警告
-        self.warn_threshold = 2
+        # 重复调用阈值 - 超过此次数才警告（1 表示第二次就警告）
+        self.warn_threshold = 1
         
         # 短时间重复检测窗口（秒）
         self.short_window = 60
@@ -194,20 +194,27 @@ class ToolDedupManager:
         if not self.is_enabled():
             return None
         
-        # 只有超过阈值且在短时间窗口内才警告
-        if call_count <= self.warn_threshold or not is_short_window_dup:
+        # 超过阈值就警告（不再要求短时间窗口，因为重复调用无论时间间隔都应该警告）
+        if call_count <= self.warn_threshold:
             return None
         
         input_preview = self._get_input_preview(tool_name, tool_input)
         
         warning = (
-            f"\n\n[⚠️ DUPLICATE TOOL CALL DETECTED]\n"
-            f"This exact {tool_name} call has been executed {call_count} times recently.\n"
+            f"\n\n🚫🚫🚫 [CRITICAL: DUPLICATE TOOL CALL - STOP!] 🚫🚫🚫\n"
+            f"═══════════════════════════════════════════════════════\n"
+            f"Tool: {tool_name}\n"
+            f"This EXACT call has been executed {call_count} times!\n"
             f"Input: {input_preview[:80]}{'...' if len(input_preview) > 80 else ''}\n"
-            f"The result is identical to previous calls.\n"
-            f"IMPORTANT: Please use the information you already have and move forward. "
-            f"Do NOT call this tool again with the same parameters.\n"
-            f"[END DUPLICATE WARNING]"
+            f"\n"
+            f"⛔ MANDATORY ACTION:\n"
+            f"1. DO NOT call this tool again with the same parameters\n"
+            f"2. USE the result you already have\n"
+            f"3. MOVE FORWARD to the next step immediately\n"
+            f"4. If stuck, try a DIFFERENT approach\n"
+            f"\n"
+            f"Repeating the same tool call is WASTEFUL and FORBIDDEN.\n"
+            f"═══════════════════════════════════════════════════════\n"
         )
         
         return warning

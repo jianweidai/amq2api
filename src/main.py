@@ -28,9 +28,7 @@ from src.auth.account_manager import (
     get_account_call_stats, update_account_rate_limit,
     is_account_in_cooldown
 )
-from src.auth.session_binding import (
-    get_bound_account, bind_session_to_account, unbind_session, get_bound_conversation_id
-)
+from src.auth.account_distributor import get_account_distributor, NoAccountAvailableError as DistributorNoAccountError
 from src.models import ClaudeRequest
 from src.amazonq.converter import convert_claude_to_codewhisperer_request, codewhisperer_request_to_dict
 from src.amazonq.stream_handler import handle_amazonq_stream
@@ -344,13 +342,10 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
         # 获取配置
         config = await read_global_config()
 
-        # 检查是否有绑定的 conversationId
-        bound_conversation_id = get_bound_conversation_id(request_data, account_type="amazonq")
-
         # 转换为 CodeWhisperer 请求
         codewhisperer_req = convert_claude_to_codewhisperer_request(
             claude_req,
-            conversation_id=bound_conversation_id,  # 使用绑定的 conversationId，如果没有则自动生成
+            conversation_id=None,  # KiroGate 风格：每个请求生成新的 conversationId，无需绑定
             profile_arn=config.profile_arn
         )
 
@@ -414,14 +409,13 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
 
         final_request = codewhisperer_dict
 
-        # 获取账号和认证头（支持会话绑定、多账号随机选择和单账号回退）
+        # 获取账号和认证头（KiroGate 风格：每个请求独立分配，无需会话绑定）
         # 检查是否指定了特定账号（用于测试）
         specified_account_id = request.headers.get("X-Account-ID")
 
         # 用于重试的变量
         account = None
         base_auth_headers = None
-        session_bound = False  # 标记是否使用了会话绑定
 
         try:
             if specified_account_id:
@@ -437,35 +431,19 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
                 base_auth_headers = await get_auth_headers_for_account(account)
                 logger.info(f"使用指定账号 - 账号: {account.get('id')} (label: {account.get('label', 'N/A')})")
             else:
-                # 优先检查会话绑定
-                bound_account_id = get_bound_account(request_data, account_type="amazonq")
-                if bound_account_id:
-                    # 检查绑定的账号是否仍然可用
-                    bound_account = get_account(bound_account_id)
-                    if bound_account and bound_account.get('enabled') and not is_account_in_cooldown(bound_account_id):
-                        account = bound_account
-                        from src.auth.auth import get_auth_headers_for_account
-                        base_auth_headers = await get_auth_headers_for_account(account)
-                        session_bound = True
-                        logger.info(f"使用会话绑定账号 - 账号: {account.get('id')} (label: {account.get('label', 'N/A')})")
-                    else:
-                        # 绑定的账号不可用，解除绑定
-                        unbind_session(request_data)
-                        logger.info(f"会话绑定的账号不可用，解除绑定")
-                
-                # 如果没有会话绑定或绑定的账号不可用，随机选择账号
-                if not session_bound:
+                # KiroGate 风格：使用智能账号分配器
+                # 每个请求独立分配账号，基于成功率、冷却时间和负载均衡
+                try:
+                    distributor = get_account_distributor()
+                    account = distributor.get_best_account(account_type="amazonq")
+                    
+                    from src.auth.auth import get_auth_headers_for_account
+                    base_auth_headers = await get_auth_headers_for_account(account)
+                    logger.info(f"智能分配账号 - 账号: {account.get('id')} (label: {account.get('label', 'N/A')})")
+                except DistributorNoAccountError:
+                    # 回退到旧的账号获取方式（兼容单账号模式）
                     account, base_auth_headers = await get_auth_headers_with_retry()
                     if account:
-                        # 创建新的会话绑定，同时生成 conversationId
-                        # 从已转换的请求中获取 conversationId
-                        new_conversation_id = codewhisperer_req.conversationState.conversationId
-                        bind_session_to_account(
-                            request_data, 
-                            account.get('id'), 
-                            account_type="amazonq",
-                            conversation_id=new_conversation_id
-                        )
                         logger.info(f"使用多账号模式 - 账号: {account.get('id')} (label: {account.get('label', 'N/A')})")
                     else:
                         logger.info("使用单账号模式（.env 配置）")
@@ -673,37 +651,64 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
                             error_str = error_text.decode() if isinstance(error_text, bytes) else str(error_text)
                             logger.error(f"上游 API 错误: {response.status_code} {error_str}")
 
+                            # 检查配额用完错误 (可能返回 400 或 429)
+                            if "ServiceQuotaExceededException" in error_str and "MONTHLY_REQUEST_COUNT" in error_str:
+                                logger.error(f"账号 {account.get('id') if account else 'legacy'} 月度配额已用完")
+                                if account:
+                                    # 多账号模式：禁用该账号
+                                    from datetime import datetime
+                                    quota_info = {
+                                        "monthly_quota_exhausted": True,
+                                        "exhausted_at": datetime.now().isoformat()
+                                    }
+                                    if isinstance(account.get('other'), str):
+                                        import json
+                                        try:
+                                            current_other = json.loads(account.get('other'))
+                                        except:
+                                            current_other = {}
+                                    else:
+                                        current_other = account.get('other') or {}
+                                    
+                                    if not isinstance(current_other, dict):
+                                        current_other = {}
+                                        
+                                    current_other.update(quota_info)
+                                    update_account(account['id'], enabled=False, other=current_other)
+                                    
+                                    # 通知分配器记录失败
+                                    if account.get('id'):
+                                        from src.auth.account_distributor import get_account_distributor
+                                        get_account_distributor().record_usage(account['id'], success=False)
+                                        
+                                    raise HTTPException(
+                                        status_code=429, # 返回 429 让客户端知道是限额问题
+                                        detail="账号月度配额已用完，已自动禁用该账号。请等待下月重置或尝试重试。"
+                                    )
+                                else:
+                                    # 单账号模式
+                                    raise HTTPException(
+                                        status_code=429,
+                                        detail="Amazon Q 月度配额已用完，请等待下月重置。"
+                                    )
+
                             # 处理 429 错误（速率限制）
                             if response.status_code == 429:
-                                # 检测月度配额用完错误
+                                # 检测月度配额用完错误(旧的检测逻辑，保留以防万一)
                                 if "ThrottlingException" in error_str and "MONTHLY_REQUEST_COUNT" in error_str:
-                                    logger.error(f"账号 {account.get('id') if account else 'legacy'} 月度配额已用完")
-                                    if account:
-                                        # 多账号模式：禁用该账号
-                                        from datetime import datetime
-                                        quota_info = {
-                                            "monthly_quota_exhausted": True,
-                                            "exhausted_at": datetime.now().isoformat()
-                                        }
-                                        current_other = account.get('other') or {}
-                                        current_other.update(quota_info)
-                                        update_account(account['id'], enabled=False, other=current_other)
-                                        raise HTTPException(
-                                            status_code=429,
-                                            detail="账号月度配额已用完，已自动禁用该账号。请等待下月重置或添加新账号。"
-                                        )
-                                    else:
-                                        # 单账号模式
-                                        raise HTTPException(
-                                            status_code=429,
-                                            detail="Amazon Q 月度配额已用完，请等待下月重置。"
-                                        )
+                                     # ... (这段逻辑已经被上面的通用检测覆盖了，可以保留也可以简化)
+                                     pass
                                 else:
                                     # 其他 429 错误（速率限制），设置 5 分钟冷却
                                     if account:
                                         from src.auth.account_manager import set_account_cooldown
                                         set_account_cooldown(account['id'], 300)  # 5 分钟冷却
                                         logger.warning(f"账号 {account['id']} 触发速率限制，进入 5 分钟冷却期")
+                                        
+                                        # 通知分配器记录失败
+                                        from src.auth.account_distributor import get_account_distributor
+                                        get_account_distributor().record_usage(account['id'], success=False)
+                                        
                                     raise HTTPException(
                                         status_code=429,
                                         detail="请求过于频繁，账号已进入 5 分钟冷却期，请稍后重试"
@@ -811,28 +816,17 @@ async def create_gemini_message(request: Request, _: bool = Depends(verify_api_k
                 raise HTTPException(status_code=400, detail=f"账号类型不是 Gemini: {specified_account_id}")
             logger.info(f"使用指定 Gemini 账号: {account['label']} (ID: {account['id']})")
         else:
-            # 优先检查会话绑定
-            bound_account_id = get_bound_account(request_data, account_type="gemini")
-            if bound_account_id:
-                # 检查绑定的账号是否仍然可用
-                bound_account = get_account(bound_account_id)
-                if bound_account and bound_account.get('enabled') and not is_account_in_cooldown(bound_account_id):
-                    account = bound_account
-                    session_bound = True
-                    logger.info(f"使用会话绑定 Gemini 账号: {account['label']} (ID: {account['id']})")
-                else:
-                    # 绑定的账号不可用，解除绑定
-                    unbind_session(request_data)
-                    logger.info(f"会话绑定的 Gemini 账号不可用，解除绑定")
-            
-            # 如果没有会话绑定或绑定的账号不可用，随机选择账号
-            if not session_bound:
+            # KiroGate 风格：使用智能账号分配器
+            try:
+                distributor = get_account_distributor()
+                account = distributor.get_best_account(account_type="gemini", model=claude_req.model)
+                logger.info(f"智能分配 Gemini 账号: {account.get('label', 'N/A')} (ID: {account['id']})")
+            except DistributorNoAccountError:
+                # 回退到随机选择
                 account = get_random_account(account_type="gemini", model=claude_req.model)
                 if not account:
                     raise HTTPException(status_code=503, detail=f"没有可用的 Gemini 账号支持模型 {claude_req.model}")
-                # 创建新的会话绑定
-                bind_session_to_account(request_data, account['id'], account_type="gemini")
-                logger.info(f"使用随机 Gemini 账号: {account['label']} (ID: {account['id']}) - 模型: {claude_req.model}")
+                logger.info(f"随机选择 Gemini 账号: {account.get('label', 'N/A')} (ID: {account['id']}) - 模型: {claude_req.model}")
 
         # 检查并使用数据库中的 access token
         other = account.get("other") or {}
@@ -1138,28 +1132,18 @@ async def create_custom_api_message(request: Request, _: bool = Depends(verify_a
                 raise HTTPException(status_code=400, detail=f"账号类型不是 Custom API: {specified_account_id}")
             logger.info(f"使用指定 Custom API 账号: {account.get('label', 'N/A')} (ID: {account['id']})")
         else:
-            # 优先检查会话绑定
-            bound_account_id = get_bound_account(request_data, account_type="custom_api")
-            if bound_account_id:
-                # 检查绑定的账号是否仍然可用
-                bound_account = get_account(bound_account_id)
-                if bound_account and bound_account.get('enabled') and not is_account_in_cooldown(bound_account_id):
-                    account = bound_account
-                    session_bound = True
-                    logger.info(f"使用会话绑定 Custom API 账号: {account.get('label', 'N/A')} (ID: {account['id']})")
-                else:
-                    # 绑定的账号不可用，解除绑定
-                    unbind_session(request_data)
-                    logger.info(f"会话绑定的 Custom API 账号不可用，解除绑定")
-            
-            # 如果没有会话绑定或绑定的账号不可用，随机选择账号
-            if not session_bound:
+            # KiroGate 风格：使用智能账号分配器
+            try:
+                distributor = get_account_distributor()
+                # Custom API 通常不区分模型（或所有账号支持所有模型），也可以传递 model 参数用于过滤
+                account = distributor.get_best_account(account_type="custom_api", model=claude_req.model)
+                logger.info(f"智能分配 Custom API 账号: {account.get('label', 'N/A')} (ID: {account['id']})")
+            except DistributorNoAccountError:
+                # 回退到随机选择
                 account = get_random_account(account_type="custom_api")
                 if not account:
                     raise HTTPException(status_code=503, detail="没有可用的 Custom API 账号")
-                # 创建新的会话绑定
-                bind_session_to_account(request_data, account['id'], account_type="custom_api")
-                logger.info(f"使用随机 Custom API 账号: {account.get('label', 'N/A')} (ID: {account['id']})")
+                logger.info(f"随机选择 Custom API 账号: {account.get('label', 'N/A')} (ID: {account['id']})")
 
         # 返回流式响应
         custom_api_account_id = account.get('id')

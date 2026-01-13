@@ -206,6 +206,17 @@ def record_usage(
     except Exception as e:
         logger.error(f"记录 token 使用失败: {e}")
     
+    try:
+        # 通知 Account Distributor (KiroGate 风格)
+        from src.auth.account_distributor import get_account_distributor
+        distributor = get_account_distributor()
+        # 这里假设只要记录了使用就是成功，失败的情况通常抛出异常不会走到这里
+        # TODO: 如果需要更精确地记录失败，需要在 handle_amazonq_stream 等地方捕获异常并显式调用记录
+        if account_id:
+            distributor.record_usage(account_id, success=True)
+    except Exception as e:
+        logger.warning(f"通知 Account Distributor 失败: {e}")
+
     return record_id
 
 

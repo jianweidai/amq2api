@@ -21,6 +21,11 @@ from src.amazonq.parser import (
     build_claude_tool_use_start_event,
     build_claude_tool_use_input_delta_event,
     parse_amazonq_event,
+    # 工具调用去重函数
+    deduplicate_tool_calls,
+    parse_bracket_tool_calls,
+    normalize_tool_call_arguments,
+    generate_tool_call_id,
 )
 
 from src.amazonq.event_stream_parser import (
@@ -47,6 +52,11 @@ __all__ = [
     "build_claude_tool_use_start_event",
     "build_claude_tool_use_input_delta_event",
     "parse_amazonq_event",
+    # 工具调用去重函数
+    "deduplicate_tool_calls",
+    "parse_bracket_tool_calls",
+    "normalize_tool_call_arguments",
+    "generate_tool_call_id",
     # event_stream_parser
     "EventStreamParser",
     "extract_event_info",

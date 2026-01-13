@@ -3,7 +3,9 @@ SSE 流处理模块（更新版）
 处理 Amazon Q Event Stream 响应并转换为 Claude 格式
 """
 import logging
+import uuid
 from typing import AsyncIterator, Optional
+from fastapi import HTTPException
 from src.amazonq.event_stream_parser import EventStreamParser, extract_event_info
 from src.amazonq.parser import (
     parse_amazonq_event,
@@ -14,7 +16,8 @@ from src.amazonq.parser import (
     build_claude_content_block_stop_event,
     build_claude_message_stop_event,
     build_claude_tool_use_start_event,
-    build_claude_tool_use_input_delta_event
+    build_claude_tool_use_input_delta_event,
+    deduplicate_tool_calls
 )
 from src.models import (
     MessageStart,
@@ -113,6 +116,56 @@ class AmazonQStreamHandler:
         self.think_buffer: str = ""
         self.pending_start_tag_chars: int = 0
 
+        # 流式去重状态
+        self.dedup_check_active: bool = True
+        self.last_assistant_text: str = ""
+        self.dedup_buffer: str = ""  # 缓冲待确认的重复文本
+        
+        # 从历史记录中提取最后一条 Assistant 消息文本
+        if request_data:
+            try:
+                messages = request_data.get('messages', [])
+                # 从后往前找最近的一组连续 assistant 消息
+                # 注意：history 可能以 user 消息结尾（最新的 tool result），我们需要跳过它
+                i = len(messages) - 1
+                
+                # 1. 跳过末尾的用户消息
+                while i >= 0 and messages[i].get('role') == 'user':
+                    i -= 1
+                
+                # 2. 收集连续的 Assistant 消息的所有文本内容
+                collected_parts = []
+                while i >= 0 and messages[i].get('role') == 'assistant':
+                    content = messages[i].get('content', '')
+                    msg_text = ""
+                    
+                    if isinstance(content, str):
+                        msg_text = content
+                    elif isinstance(content, list):
+                        parts = []
+                        for block in content:
+                            if isinstance(block, dict) and block.get('type') == 'text':
+                                parts.append(block.get('text', ''))
+                        msg_text = "".join(parts)
+                    
+                    if msg_text:
+                        # 插入到最前面，以保持从旧到新的顺序
+                        collected_parts.insert(0, msg_text)
+                    
+                    i -= 1
+                
+                self.last_assistant_text = "".join(collected_parts)
+                
+                if self.last_assistant_text:
+                    logger.debug(f"[STREAM_DEDUP] 找到 Last Assistant Text (len={len(self.last_assistant_text)}): {self.last_assistant_text[:100]}...")
+            except Exception as e:
+                logger.warning(f"提取 Last Assistant Text 失败: {e}")
+                self.dedup_check_active = False
+
+        if not self.last_assistant_text:
+            logger.debug("[STREAM_DEDUP] 未找到 Last Assistant Text，去重未激活")
+            self.dedup_check_active = False
+
     async def handle_stream(
         self,
         upstream_bytes: AsyncIterator[bytes]
@@ -193,6 +246,41 @@ class AmazonQStreamHandler:
 
                     # 处理内容并检测 thinking 标签
                     if event.delta and event.delta.text:
+                        # --- 流式去重逻辑 ---
+                        if self.dedup_check_active:
+                            self.dedup_buffer += event.delta.text
+                            
+                            # 检查是否超过历史长度
+                            if len(self.dedup_buffer) > len(self.last_assistant_text):
+                                if self.dedup_buffer.startswith(self.last_assistant_text):
+                                    # 前缀匹配：去掉重复的历史部分，只保留新出的内容
+                                    event.delta.text = self.dedup_buffer[len(self.last_assistant_text):]
+                                    logger.info(f"[STREAM_DEDUP] 成功去除重复前缀 (len={len(self.last_assistant_text)})")
+                                else:
+                                    # 前缀不匹配：说明内容发散，不是重复
+                                    logger.debug(f"[STREAM_DEDUP] Buffer超过历史长度且不匹配，停止去重。Buffer: '{self.dedup_buffer.replace(chr(10), ' ')}'...")
+                                    event.delta.text = self.dedup_buffer
+                                
+                                # 无论哪种情况，buffer 都已处理完（要么去重输出，要么全量输出）
+                                self.dedup_buffer = ""
+                                self.dedup_check_active = False
+                            else:
+                                # buffer 长度 <= 历史长度
+                                expected_part = self.last_assistant_text[:len(self.dedup_buffer)]
+                                if self.dedup_buffer == expected_part:
+                                    # 完全匹配历史的前 N 个字符：暂存 buffer，暂不输出
+                                    event.delta.text = ""
+                                else:
+                                    # 发现不匹配：说明内容发散，把 buffer 吐出来
+                                    logger.debug(f"[STREAM_DEDUP] Buffer内容不匹配，停止去重。Buffer: '{self.dedup_buffer.replace(chr(10), ' ')}'...")
+                                    event.delta.text = self.dedup_buffer
+                                    self.dedup_buffer = ""
+                                    self.dedup_check_active = False
+                        
+                        # 如果文本依然为空（被 buffering），则跳过本次循环
+                        if not event.delta.text:
+                            continue
+
                         content = event.delta.text
                         self.think_buffer += content
 
@@ -373,7 +461,62 @@ class AmazonQStreamHandler:
 
         except Exception as e:
             logger.error(f"处理流时发生错误: {e}", exc_info=True)
-            raise
+            
+            # 尝试优雅地通知客户端错误
+            error_message = str(e)
+            if isinstance(e, HTTPException):
+                error_message = f"[系统错误] {e.detail}"
+            else:
+                error_message = f"[未处理异常] {str(e)}"
+
+            # 1. 确保 message_start 已发送
+            if not self.message_start_sent:
+                try:
+                    self.conversation_id = str(uuid.uuid4())
+                    cli_event = build_claude_message_start_event(
+                        self.conversation_id,
+                        self.model,
+                        self.input_tokens,
+                        cache_creation_input_tokens=self.cache_creation_input_tokens,
+                        cache_read_input_tokens=self.cache_read_input_tokens
+                    )
+                    yield cli_event
+                    self.message_start_sent = True
+                except Exception as start_err:
+                    logger.error(f"发送补救的 message_start 失败: {start_err}")
+                    raise e
+
+            # 2. 如果当前有打开的内容块，先关闭它
+            if self.content_block_start_sent and not self.content_block_stop_sent:
+                try:
+                    yield build_claude_content_block_stop_event(self.content_block_index)
+                    self.content_block_stop_sent = True
+                except Exception:
+                    pass
+
+            # 3. 发送错误文本块
+            try:
+                self.content_block_index += 1
+                yield build_claude_content_block_start_event(self.content_block_index, "text")
+                yield build_claude_content_block_delta_event(self.content_block_index, error_message)
+                yield build_claude_content_block_stop_event(self.content_block_index)
+            except Exception as block_err:
+                logger.error(f"发送错误文本块失败: {block_err}")
+
+            # 4. 发送 message_stop
+            try:
+                yield build_claude_message_stop_event(
+                    self.input_tokens, 
+                    0, 
+                    "end_turn",
+                    cache_creation_input_tokens=self.cache_creation_input_tokens,
+                    cache_read_input_tokens=self.cache_read_input_tokens
+                )
+            except Exception as stop_err:
+                logger.error(f"发送 message_stop 失败: {stop_err}")
+            
+            # 不再 raise，以正常结束流
+
 
     async def _handle_tool_use_event(self, payload: dict) -> AsyncIterator[str]:
         """
@@ -394,17 +537,25 @@ class AmazonQStreamHandler:
 
             # logger.info(f"Tool use 事件 - ID: {tool_use_id}, Name: {tool_name}, Stop: {is_stop}")
             # logger.debug(f"Tool input: {tool_input}")
+            
+            # 调试日志：查看原始 payload
+            import json as _json
+            logger.debug(f"[TOOL_DEBUG] 原始 payload: {_json.dumps(payload, ensure_ascii=False, default=str)[:500]}")
 
-            # 添加去重机制：检查是否已经处理过这个 tool_use_id
-            # if tool_use_id and not is_stop:
-                # 如果这个 tool_use_id 已经在当前工具调用中，说明是重复事件
-                # if self.tool_use_id == tool_use_id and self.current_tool_use:
-                #     logger.warning(f"检测到重复的 tool use 事件，toolUseId={tool_use_id}，跳过处理")
-                #     return
-                # # 如果这个 tool_use_id 之前处理过但已经完成，也是重复事件
-                # elif tool_use_id in self._processed_tool_use_ids:
-                #     logger.warning(f"检测到已处理过的 tool use 事件，toolUseId={tool_use_id}，跳过处理")
-                #     return
+            # 去重机制：检查是否已经处理过这个 tool_use_id
+            # 注意：只有在没有 input 字段的"纯开始事件"时才检测重复
+            # 有 input 字段的增量事件需要正常处理以累积参数
+            has_input = 'input' in payload and payload.get('input')
+            
+            if tool_use_id and not is_stop and not has_input:
+                # 如果这个 tool_use_id 已经在当前工具调用中，说明是重复的开始事件
+                if self.tool_use_id == tool_use_id and self.current_tool_use:
+                    logger.debug(f"[TOOL_DEDUP] 检测到重复的 tool use 开始事件，toolUseId={tool_use_id}，跳过处理")
+                    return
+                # 如果这个 tool_use_id 之前已经处理完成，也是重复事件
+                elif tool_use_id in self._processed_tool_use_ids and not self.current_tool_use:
+                    logger.warning(f"[TOOL_DEDUP] 检测到已处理过的 tool use 事件，toolUseId={tool_use_id}，跳过处理")
+                    return
 
             # 如果是新 tool use 事件的开始
             if tool_use_id and tool_name and not self.current_tool_use:

@@ -5,7 +5,9 @@
 """
 import json
 import logging
-from typing import Optional, Dict, Any
+import re
+import uuid
+from typing import Optional, Dict, Any, List, Tuple
 from src.models import (
     CodeWhispererEventData,
     MessageStart,
@@ -381,3 +383,230 @@ def parse_amazonq_event(event_info: Dict[str, Any]) -> Optional[CodeWhispererEve
     except Exception as e:
         logger.error(f"解析 Amazon Q 事件失败: {e}")
         return None
+
+
+# ============================================================================
+# 工具调用去重函数（移植自 KiroGate）
+# ============================================================================
+
+def generate_tool_call_id() -> str:
+    """
+    生成唯一的 tool_call_id
+    
+    Returns:
+        格式为 'call_xxxxxxxx' 的唯一标识符
+    """
+    return f"call_{uuid.uuid4().hex[:12]}"
+
+
+def find_matching_brace(text: str, start_pos: int) -> int:
+    """
+    找到与指定位置的开括号匹配的闭括号位置
+    
+    使用 bracket counting 来正确处理嵌套 JSON。
+    正确处理字符串中的括号和转义字符。
+    
+    Args:
+        text: 要搜索的文本
+        start_pos: 开括号 '{' 的位置
+        
+    Returns:
+        闭括号的位置，如果未找到则返回 -1
+        
+    Example:
+        >>> find_matching_brace('{"a": {"b": 1}}', 0)
+        14
+        >>> find_matching_brace('{"a": "{}"}', 0)
+        10
+    """
+    if start_pos >= len(text) or text[start_pos] != '{':
+        return -1
+    
+    brace_count = 0
+    in_string = False
+    escape_next = False
+    
+    for i in range(start_pos, len(text)):
+        char = text[i]
+        
+        if escape_next:
+            escape_next = False
+            continue
+        
+        if char == '\\' and in_string:
+            escape_next = True
+            continue
+        
+        if char == '"' and not escape_next:
+            in_string = not in_string
+            continue
+        
+        if not in_string:
+            if char == '{':
+                brace_count += 1
+            elif char == '}':
+                brace_count -= 1
+                if brace_count == 0:
+                    return i
+    
+    return -1
+
+
+def parse_bracket_tool_calls(response_text: str) -> List[Dict[str, Any]]:
+    """
+    解析 [Called func_name with args: {...}] 格式的工具调用
+    
+    某些模型会以文本格式返回工具调用，而不是结构化 JSON。
+    此函数从文本中提取这些调用。
+    
+    Args:
+        response_text: 模型响应文本
+        
+    Returns:
+        OpenAI 格式的工具调用列表
+        
+    Example:
+        >>> text = '[Called get_weather with args: {"city": "London"}]'
+        >>> calls = parse_bracket_tool_calls(text)
+        >>> calls[0]["function"]["name"]
+        'get_weather'
+    """
+    if not response_text or "[Called" not in response_text:
+        return []
+    
+    tool_calls = []
+    pattern = r'\[Called\s+(\w+)\s+with\s+args:\s*'
+    
+    for match in re.finditer(pattern, response_text, re.IGNORECASE):
+        func_name = match.group(1)
+        args_start = match.end()
+        
+        # 查找 JSON 的开始位置
+        json_start = response_text.find('{', args_start)
+        if json_start == -1:
+            continue
+        
+        # 使用括号匹配找到 JSON 的结束位置
+        json_end = find_matching_brace(response_text, json_start)
+        if json_end == -1:
+            continue
+        
+        json_str = response_text[json_start:json_end + 1]
+        
+        try:
+            args = json.loads(json_str)
+            tool_call_id = generate_tool_call_id()
+            tool_calls.append({
+                "id": tool_call_id,
+                "type": "function",
+                "function": {
+                    "name": func_name,
+                    "arguments": json.dumps(args)
+                }
+            })
+        except json.JSONDecodeError:
+            logger.warning(f"无法解析工具调用参数: {json_str[:100]}")
+    
+    return tool_calls
+
+
+def deduplicate_tool_calls(tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    去除重复的工具调用
+    
+    去重基于两个标准：
+    1. 按 ID 去重 - 如果存在多个具有相同 ID 的工具调用，
+       保留参数更完整（非空 "{}"）的那个
+    2. 按 name+arguments 去重 - 删除完全相同的调用
+    
+    Args:
+        tool_calls: 工具调用列表
+        
+    Returns:
+        去重后的工具调用列表
+    """
+    if not tool_calls:
+        return []
+    
+    # 阶段 1: 按 ID 去重，保留参数更完整的版本
+    by_id: Dict[str, Dict[str, Any]] = {}
+    no_id_calls = []
+    
+    for tc in tool_calls:
+        tc_id = tc.get("id", "")
+        if not tc_id:
+            # 没有 ID 的调用单独处理
+            no_id_calls.append(tc)
+            continue
+        
+        existing = by_id.get(tc_id)
+        if existing is None:
+            by_id[tc_id] = tc
+        else:
+            # 存在重复 ID，保留参数更完整的版本
+            existing_args = existing.get("function", {}).get("arguments", "{}")
+            current_args = tc.get("function", {}).get("arguments", "{}")
+            
+            # 优先选择非空参数，或更长的参数
+            if current_args != "{}" and (existing_args == "{}" or len(current_args) > len(existing_args)):
+                logger.debug(f"替换工具调用 {tc_id}，使用更完整的参数: {len(existing_args)} -> {len(current_args)}")
+                by_id[tc_id] = tc
+    
+    # 收集所有有 ID 的调用
+    result_with_id = list(by_id.values())
+    
+    # 阶段 2: 按 name+arguments 去重
+    seen = set()
+    unique = []
+    
+    for tc in result_with_id + no_id_calls:
+        # 防止 function 为 None
+        func = tc.get("function") or {}
+        func_name = func.get("name") or ""
+        func_args = func.get("arguments") or "{}"
+        key = f"{func_name}-{func_args}"
+        
+        if key not in seen:
+            seen.add(key)
+            unique.append(tc)
+    
+    if len(tool_calls) != len(unique):
+        logger.info(f"[TOOL_DEDUP] 工具调用去重: {len(tool_calls)} -> {len(unique)}")
+    
+    return unique
+
+
+def normalize_tool_call_arguments(tool_call: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    标准化工具调用的参数字段
+    
+    确保 arguments 字段是有效的 JSON 字符串。
+    
+    Args:
+        tool_call: 工具调用字典
+        
+    Returns:
+        标准化后的工具调用
+    """
+    func = tool_call.get("function", {})
+    args = func.get("arguments", "")
+    tool_name = func.get("name", "unknown")
+    
+    if isinstance(args, str):
+        if args.strip():
+            try:
+                parsed = json.loads(args)
+                # 确保结果是 JSON 字符串
+                tool_call["function"]["arguments"] = json.dumps(parsed)
+            except json.JSONDecodeError as e:
+                logger.warning(f"无法解析工具 '{tool_name}' 的参数: {e}. 原始值: {args[:200]}")
+                tool_call["function"]["arguments"] = "{}"
+        else:
+            tool_call["function"]["arguments"] = "{}"
+    elif isinstance(args, dict):
+        # 如果已经是字典，序列化为字符串
+        tool_call["function"]["arguments"] = json.dumps(args)
+    else:
+        tool_call["function"]["arguments"] = "{}"
+    
+    return tool_call

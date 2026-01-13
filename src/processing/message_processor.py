@@ -100,8 +100,30 @@ def process_claude_history_for_amazonq(history: List[Dict[str, Any]]) -> List[Di
                 })
                 pending_user_messages = []
 
-            # 添加助手消息
-            processed_history.append(msg)
+            # 检查上一条消息是否也是 Assistant 消息，如果是则合并
+            if processed_history and "assistantResponseMessage" in processed_history[-1]:
+                last_assistant_msg = processed_history[-1]["assistantResponseMessage"]
+                current_assistant_msg = msg["assistantResponseMessage"]
+                
+                # 合并内容
+                last_content = last_assistant_msg.get("content", "")
+                current_content = current_assistant_msg.get("content", "")
+                if current_content:
+                    if last_content:
+                        last_assistant_msg["content"] = last_content + "\n\n" + current_content
+                    else:
+                        last_assistant_msg["content"] = current_content
+                
+                # 合并工具调用
+                last_tools = last_assistant_msg.get("toolUses", [])
+                current_tools = current_assistant_msg.get("toolUses", [])
+                if current_tools:
+                    last_assistant_msg["toolUses"] = last_tools + current_tools
+                
+                logger.info("[MESSAGE_PROCESSOR] 合并了连续的 Assistant 消息")
+            else:
+                # 添加新的助手消息
+                processed_history.append(msg)
 
     # 处理末尾剩余的用户消息
     if pending_user_messages:
