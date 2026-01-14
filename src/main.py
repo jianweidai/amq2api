@@ -550,183 +550,170 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
         api_url = "https://q.us-east-1.amazonaws.com/"
 
         # 创建字节流响应（支持 401/403 重试）
+        # 创建字节流响应（支持 401/403 重试，以及 5xx 重试）
         async def byte_stream():
+            max_retries = 3
+            current_retry = 0
+            
             async with httpx.AsyncClient(timeout=300.0) as client:
-                try:
-                    async with client.stream(
-                        "POST",
-                        api_url,
-                        json=final_request,
-                        headers=auth_headers
-                    ) as response:
-                        # 检查响应状态
-                        if response.status_code in (401, 403):
-                            # 401/403 错误：刷新 token 并重试
-                            logger.warning(f"收到 {response.status_code} 错误，尝试刷新 token 并重试")
-                            error_text = await response.aread()
-                            error_str = error_text.decode() if isinstance(error_text, bytes) else str(error_text)
-                            logger.error(f"原始错误: {error_str}")
+                while True:
+                    try:
+                        # 更新尝试次数 header
+                        if "Amz-Sdk-Request" in auth_headers:
+                            auth_headers["Amz-Sdk-Request"] = f"attempt={current_retry+1}; max={max_retries+1}"
 
-                            # 检测账号是否被封
-                            if "TEMPORARILY_SUSPENDED" in error_str and account:
-                                logger.error(f"账号 {account['id']} 已被封禁，自动禁用")
-                                from datetime import datetime
-                                suspend_info = {
-                                    "suspended": True,
-                                    "suspended_at": datetime.now().isoformat(),
-                                    "suspend_reason": "TEMPORARILY_SUSPENDED"
-                                }
-                                current_other = account.get('other') or {}
-                                current_other.update(suspend_info)
-                                update_account(account['id'], enabled=False, other=current_other)
-
-                                # 如果不是指定账号，抛出 TokenRefreshError 让外层重试
-                                if not specified_account_id:
-                                    raise TokenRefreshError(f"账号已被封禁: {error_str}")
-                                else:
-                                    raise HTTPException(status_code=403, detail=f"账号已被封禁: {error_str}")
-
-                            try:
-                                # 刷新 token（支持多账号和单账号模式）
-                                if account:
-                                    # 多账号模式：刷新当前账号
-                                    refreshed_account = await refresh_account_token(account)
-                                    new_access_token = refreshed_account.get("accessToken")
-                                else:
-                                    # 单账号模式：刷新 .env 配置的 token
-                                    from src.auth.auth import refresh_legacy_token
-                                    await refresh_legacy_token()
-                                    from src.config import read_global_config
-                                    config = await read_global_config()
-                                    new_access_token = config.access_token
-
-                                if not new_access_token:
-                                    raise HTTPException(status_code=502, detail="Token 刷新后仍无法获取 accessToken")
-
-                                # 更新认证头
-                                auth_headers["Authorization"] = f"Bearer {new_access_token}"
-
-                                # 使用新 token 重试
-                                async with client.stream(
-                                    "POST",
-                                    api_url,
-                                    json=final_request,
-                                    headers=auth_headers
-                                ) as retry_response:
-                                    if retry_response.status_code != 200:
-                                        retry_error = await retry_response.aread()
-                                        retry_error_str = retry_error.decode() if isinstance(retry_error, bytes) else str(retry_error)
-                                        logger.error(f"重试后仍失败: {retry_response.status_code} {retry_error_str}")
-
-                                        # 重试后仍然失败，检测是否被封
-                                        if retry_response.status_code == 403 and "TEMPORARILY_SUSPENDED" in retry_error_str and account:
-                                            logger.error(f"账号 {account['id']} 已被封禁，自动禁用")
-                                            from datetime import datetime
-                                            suspend_info = {
-                                                "suspended": True,
-                                                "suspended_at": datetime.now().isoformat(),
-                                                "suspend_reason": "TEMPORARILY_SUSPENDED"
-                                            }
-                                            current_other = account.get('other') or {}
-                                            current_other.update(suspend_info)
-                                            update_account(account['id'], enabled=False, other=current_other)
-
-                                        raise HTTPException(
-                                            status_code=retry_response.status_code,
-                                            detail=f"重试后仍失败: {retry_error_str}"
-                                        )
-
-                                    # 重试成功，返回数据流
-                                    async for chunk in retry_response.aiter_bytes():
-                                        if chunk:
-                                            yield chunk
-                                    return
-
-                            except TokenRefreshError as e:
-                                logger.error(f"Token 刷新失败: {e}")
-                                raise HTTPException(status_code=502, detail=f"Token 刷新失败: {str(e)}")
-
-                        elif response.status_code != 200:
-                            error_text = await response.aread()
-                            error_str = error_text.decode() if isinstance(error_text, bytes) else str(error_text)
-                            logger.error(f"上游 API 错误: {response.status_code} {error_str}")
-
-                            # 检查配额用完错误 (可能返回 400 或 429)
-                            if "ServiceQuotaExceededException" in error_str and "MONTHLY_REQUEST_COUNT" in error_str:
-                                logger.error(f"账号 {account.get('id') if account else 'legacy'} 月度配额已用完")
-                                if account:
-                                    # 多账号模式：禁用该账号
+                        async with client.stream(
+                            "POST",
+                            api_url,
+                            json=final_request,
+                            headers=auth_headers
+                        ) as response:
+                            # 1. 检查响应状态 - 处理 401/403 (Token 过期/封禁)
+                            if response.status_code in (401, 403):
+                                logger.warning(f"收到 {response.status_code} 错误 (尝试 {current_retry+1})")
+                                error_text = await response.aread()
+                                error_str = error_text.decode() if isinstance(error_text, bytes) else str(error_text)
+                                
+                                # 检测账号是否被封
+                                if "TEMPORARILY_SUSPENDED" in error_str and account:
+                                    logger.error(f"账号 {account['id']} 已被封禁，自动禁用")
                                     from datetime import datetime
-                                    quota_info = {
-                                        "monthly_quota_exhausted": True,
-                                        "exhausted_at": datetime.now().isoformat()
+                                    suspend_info = {
+                                        "suspended": True,
+                                        "suspended_at": datetime.now().isoformat(),
+                                        "suspend_reason": "TEMPORARILY_SUSPENDED"
                                     }
-                                    if isinstance(account.get('other'), str):
-                                        import json
-                                        try:
-                                            current_other = json.loads(account.get('other'))
-                                        except:
-                                            current_other = {}
-                                    else:
-                                        current_other = account.get('other') or {}
-                                    
-                                    if not isinstance(current_other, dict):
-                                        current_other = {}
-                                        
-                                    current_other.update(quota_info)
+                                    current_other = account.get('other') or {}
+                                    current_other.update(suspend_info)
                                     update_account(account['id'], enabled=False, other=current_other)
+
+                                    if not specified_account_id:
+                                        raise TokenRefreshError(f"账号已被封禁: {error_str}")
+                                    else:
+                                        raise HTTPException(status_code=403, detail=f"账号已被封禁: {error_str}")
+
+                                try:
+                                    logger.info("尝试刷新 Token...")
+                                    # 刷新 token（支持多账号和单账号模式）
+                                    if account:
+                                        # 多账号模式：刷新当前账号
+                                        refreshed_account = await refresh_account_token(account)
+                                        new_access_token = refreshed_account.get("accessToken")
+                                    else:
+                                        # 单账号模式：刷新 .env 配置的 token
+                                        from src.auth.auth import refresh_legacy_token
+                                        await refresh_legacy_token()
+                                        from src.config import read_global_config
+                                        config = await read_global_config()
+                                        new_access_token = config.access_token
+
+                                    if not new_access_token:
+                                        raise HTTPException(status_code=502, detail="Token 刷新后仍无法获取 accessToken")
+
+                                    # 更新认证头
+                                    auth_headers["Authorization"] = f"Bearer {new_access_token}"
+                                    logger.info("Token 刷新成功，准备重试请求")
                                     
-                                    # 通知分配器记录失败
-                                    if account.get('id'):
-                                        from src.auth.account_distributor import get_account_distributor
-                                        get_account_distributor().record_usage(account['id'], success=False)
-                                        
-                                    raise HTTPException(
-                                        status_code=429, # 返回 429 让客户端知道是限额问题
-                                        detail="账号月度配额已用完，已自动禁用该账号。请等待下月重置或尝试重试。"
-                                    )
+                                    # 避免死循环，如果已经是重试过多次的 401，可能无法修复
+                                    if current_retry >= max_retries:
+                                         logger.warning("Token 刷新成功但重试次数已耗尽 (401Loop?)")
+                                    
+                                    # 重新开始循环，使用新 Token 发起请求
+                                    # 注意：这里不增加 current_retry，给新 Token 一次公平的机会（除非你希望严格限制总次数）
+                                    # 为了稳健性，稍微 sleep 一下？不需要。
+                                    continue
+
+                                except TokenRefreshError as e:
+                                    logger.error(f"Token 刷新失败: {e}")
+                                    raise HTTPException(status_code=502, detail=f"Token 刷新失败: {str(e)}")
+
+                            # 2. 处理 5xx 错误 (服务端错误)
+                            elif response.status_code >= 500:
+                                error_text = await response.aread()
+                                error_str = error_text.decode() if isinstance(error_text, bytes) else str(error_text)
+                                logger.warning(f"上游 API {response.status_code} 错误 (尝试 {current_retry+1}/{max_retries+1}): {error_str}")
+                                
+                                if current_retry < max_retries:
+                                    current_retry += 1
+                                    import asyncio
+                                    import random
+                                    # 指数退避 + 抖动
+                                    sleep_time = 1.0 * (2 ** (current_retry - 1)) + random.uniform(0, 1)
+                                    logger.info(f"等待 {sleep_time:.2f}s 后重试...")
+                                    await asyncio.sleep(sleep_time)
+                                    continue
                                 else:
-                                    # 单账号模式
+                                    logger.error("重试耗尽，抛出 502")
                                     raise HTTPException(
-                                        status_code=429,
-                                        detail="Amazon Q 月度配额已用完，请等待下月重置。"
+                                        status_code=502, 
+                                        detail=f"上游 API 错误 (重试耗尽): {error_str}"
                                     )
 
-                            # 处理 429 错误（速率限制）
-                            if response.status_code == 429:
-                                # 检测月度配额用完错误(旧的检测逻辑，保留以防万一)
-                                if "ThrottlingException" in error_str and "MONTHLY_REQUEST_COUNT" in error_str:
-                                     # ... (这段逻辑已经被上面的通用检测覆盖了，可以保留也可以简化)
-                                     pass
-                                else:
-                                    # 其他 429 错误（速率限制），设置 5 分钟冷却
+                            # 3. 处理其他错误 (400, 429等)
+                            elif response.status_code != 200:
+                                error_text = await response.aread()
+                                error_str = error_text.decode() if isinstance(error_text, bytes) else str(error_text)
+                                logger.error(f"上游 API 错误: {response.status_code} {error_str}")
+
+                                # 检查配额用完
+                                if "ServiceQuotaExceededException" in error_str and "MONTHLY_REQUEST_COUNT" in error_str:
+                                    logger.error(f"账号 {account.get('id') if account else 'legacy'} 月度配额已用完")
+                                    if account:
+                                        from datetime import datetime
+                                        quota_info = {
+                                            "monthly_quota_exhausted": True,
+                                            "exhausted_at": datetime.now().isoformat()
+                                        }
+                                        current_other = account.get('other') or {}
+                                        if isinstance(current_other, str):
+                                            import json
+                                            try: current_other = json.loads(current_other)
+                                            except: current_other = {}
+                                        if not isinstance(current_other, dict): current_other = {}
+                                        
+                                        current_other.update(quota_info)
+                                        update_account(account['id'], enabled=False, other=current_other)
+                                        
+                                        if account.get('id'):
+                                            from src.auth.account_distributor import get_account_distributor
+                                            get_account_distributor().record_usage(account['id'], success=False)
+                                            
+                                        raise HTTPException(status_code=429, detail="账号月度配额已用完，已自动禁用该账号。")
+                                    else:
+                                        raise HTTPException(status_code=429, detail="Amazon Q 月度配额已用完。")
+
+                                # 处理 429 错误 (Rate Limit)
+                                if response.status_code == 429:
                                     if account:
                                         from src.auth.account_manager import set_account_cooldown
-                                        set_account_cooldown(account['id'], 300)  # 5 分钟冷却
+                                        set_account_cooldown(account['id'], 300)
                                         logger.warning(f"账号 {account['id']} 触发速率限制，进入 5 分钟冷却期")
-                                        
-                                        # 通知分配器记录失败
                                         from src.auth.account_distributor import get_account_distributor
                                         get_account_distributor().record_usage(account['id'], success=False)
                                         
-                                    raise HTTPException(
-                                        status_code=429,
-                                        detail="请求过于频繁，账号已进入 5 分钟冷却期，请稍后重试"
-                                    )
+                                    raise HTTPException(status_code=429, detail="请求过于频繁，账号已进入 5 分钟冷却期，请稍后重试")
 
-                            raise HTTPException(
-                                status_code=response.status_code,
-                                detail=f"上游 API 错误: {error_str}"
-                            )
+                                raise HTTPException(
+                                    status_code=response.status_code,
+                                    detail=f"上游 API 错误: {error_str}"
+                                )
 
-                        # 正常响应，处理 Event Stream（字节流）
-                        async for chunk in response.aiter_bytes():
-                            if chunk:
-                                yield chunk
+                            # 4. 正常响应
+                            async for chunk in response.aiter_bytes():
+                                if chunk:
+                                    yield chunk
+                            return
 
-                except httpx.RequestError as e:
-                    logger.error(f"请求错误: {e}")
-                    raise HTTPException(status_code=502, detail=f"上游服务错误: {str(e)}")
+                    except httpx.RequestError as e:
+                        logger.error(f"网络请求错误: {e}")
+                        if current_retry < max_retries:
+                            current_retry += 1
+                            logger.warning(f"网络错误，{1.0}s 后重试 (尝试 {current_retry}/{max_retries})")
+                            import asyncio
+                            await asyncio.sleep(1.0)
+                            continue
+                        raise HTTPException(status_code=502, detail=f"上游服务网络错误: {str(e)}")
+
 
         # 返回流式响应
         account_id_for_tracking = account.get('id') if account else None
