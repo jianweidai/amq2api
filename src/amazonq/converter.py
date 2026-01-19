@@ -49,6 +49,8 @@ def map_claude_model_to_amazonq(claude_model: str) -> str:
 
     映射规则：
     - claude-sonnet-4.5 或 claude-sonnet-4-5 开头 → claude-sonnet-4.5
+    - claude-opus-4-5 或 claude-opus-4.5 开头 → claude-sonnet-4.5
+    - claude-haiku 开头 → claude-haiku-4.5
     - 其他所有模型 → claude-sonnet-4
 
     Args:
@@ -62,6 +64,10 @@ def map_claude_model_to_amazonq(claude_model: str) -> str:
 
     # 检查是否是 claude-sonnet-4.5 或 claude-sonnet-4-5 开头
     if model_lower.startswith("claude-sonnet-4.5") or model_lower.startswith("claude-sonnet-4-5"):
+        return "claude-sonnet-4.5"
+
+    # 检查是否是 claude-opus-4-5 或 claude-opus-4.5 开头 - 映射到 claude-sonnet-4.5
+    if model_lower.startswith("claude-opus-4-5") or model_lower.startswith("claude-opus-4.5"):
         return "claude-sonnet-4.5"
 
     if model_lower.startswith("claude-haiku"):
