@@ -301,13 +301,15 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
 
         # 智能路由：根据模型选择渠道
         specified_account_id = request.headers.get("X-Account-ID")
+        test_mode = request.headers.get("X-Test-Mode") == "true"  # 测试模式标志
 
         if specified_account_id:
             # 指定了账号，检查账号类型并路由到对应渠道
             account = get_account(specified_account_id)
             if not account:
                 raise HTTPException(status_code=404, detail=f"账号不存在: {specified_account_id}")
-            if not account.get('enabled'):
+            # 测试模式下允许使用禁用的账号
+            if not test_mode and not account.get('enabled'):
                 raise HTTPException(status_code=403, detail=f"账号已禁用: {specified_account_id}")
 
             account_type = account.get('type', 'amazonq')
@@ -412,6 +414,7 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
         # 获取账号和认证头（KiroGate 风格：每个请求独立分配，无需会话绑定）
         # 检查是否指定了特定账号（用于测试）
         specified_account_id = request.headers.get("X-Account-ID")
+        test_mode = request.headers.get("X-Test-Mode") == "true"  # 测试模式标志
 
         # 用于重试的变量
         account = None
@@ -423,7 +426,8 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
                 account = get_account(specified_account_id)
                 if not account:
                     raise HTTPException(status_code=404, detail=f"账号不存在: {specified_account_id}")
-                if not account.get('enabled'):
+                # 测试模式下允许使用禁用的账号
+                if not test_mode and not account.get('enabled'):
                     raise HTTPException(status_code=403, detail=f"账号已禁用: {specified_account_id}")
 
                 # 获取该账号的认证头
@@ -786,6 +790,7 @@ async def create_gemini_message(request: Request, _: bool = Depends(verify_api_k
 
         # 检查是否指定了特定账号（用于测试）
         specified_account_id = request.headers.get("X-Account-ID")
+        test_mode = request.headers.get("X-Test-Mode") == "true"  # 测试模式标志
         session_bound = False  # 标记是否使用了会话绑定
 
         if retry_account:
@@ -797,7 +802,8 @@ async def create_gemini_message(request: Request, _: bool = Depends(verify_api_k
             account = get_account(specified_account_id)
             if not account:
                 raise HTTPException(status_code=404, detail=f"账号不存在: {specified_account_id}")
-            if not account.get('enabled'):
+            # 测试模式下允许使用禁用的账号
+            if not test_mode and not account.get('enabled'):
                 raise HTTPException(status_code=403, detail=f"账号已禁用: {specified_account_id}")
             if account.get('type') != 'gemini':
                 raise HTTPException(status_code=400, detail=f"账号类型不是 Gemini: {specified_account_id}")
@@ -1106,6 +1112,7 @@ async def create_custom_api_message(request: Request, _: bool = Depends(verify_a
 
         # 检查是否指定了特定账号（用于测试）
         specified_account_id = request.headers.get("X-Account-ID")
+        test_mode = request.headers.get("X-Test-Mode") == "true"  # 测试模式标志
         session_bound = False  # 标记是否使用了会话绑定
 
         if specified_account_id:
@@ -1113,7 +1120,8 @@ async def create_custom_api_message(request: Request, _: bool = Depends(verify_a
             account = get_account(specified_account_id)
             if not account:
                 raise HTTPException(status_code=404, detail=f"账号不存在: {specified_account_id}")
-            if not account.get('enabled'):
+            # 测试模式下允许使用禁用的账号
+            if not test_mode and not account.get('enabled'):
                 raise HTTPException(status_code=403, detail=f"账号已禁用: {specified_account_id}")
             if account.get('type') != 'custom_api':
                 raise HTTPException(status_code=400, detail=f"账号类型不是 Custom API: {specified_account_id}")

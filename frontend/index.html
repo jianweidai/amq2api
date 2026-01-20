@@ -772,34 +772,102 @@
     <div id="tab-accounts" class="tab-content active">
       <div class="panel">
         <h2>账号列表</h2>
-        <div class="row">
-          <button onclick="loadAccounts()">刷新列表</button>
-          <select id="filter_type" onchange="applyFilters()" style="max-width:150px">
-            <option value="all">全部类型</option>
-            <option value="amazonq">Amazon Q</option>
-            <option value="gemini">Gemini</option>
-            <option value="custom_api">Custom API</option>
-          </select>
-          <input id="filter_start_date" type="date" onchange="applyFilters()" placeholder="开始日期"
-            style="max-width:150px" />
-          <input id="filter_end_date" type="date" onchange="applyFilters()" placeholder="结束日期"
-            style="max-width:150px" />
-          <button class="btn-secondary" onclick="clearFilters()">清除筛选</button>
-          <button class="btn-danger" onclick="batchDelete()" id="batch_delete_btn" style="display:none">删除选中</button>
-          <button class="btn-warning" onclick="testSelectedAccounts()" id="test_selected_btn"
-            style="display:none">测试选中</button>
-          <button class="btn-warning" onclick="testAllAccounts()">测试所有账号</button>
-          <button class="btn-warning" onclick="refreshAllTokens()">批量刷新 Token</button>
-          <input id="test_message" placeholder="测试消息" value="Hello" style="max-width:200px" />
-          <div id="test_status" class="chip" style="display:none"></div>
+        
+        <!-- 账号状态 Tab 切换 -->
+        <div class="tab-container" style="margin-bottom:16px">
+          <button class="tab-btn active" data-status="enabled" onclick="switchAccountStatus('enabled')">✅ 启用的账号</button>
+          <button class="tab-btn" data-status="disabled" onclick="switchAccountStatus('disabled')">🚫 禁用的账号</button>
         </div>
-        <div id="test_results" style="margin-top:12px"></div>
-        <div class="row" style="margin-top:12px;align-items:center">
-          <input id="select_all" type="checkbox" class="account-checkbox" onchange="toggleSelectAll()" />
-          <label for="select_all" style="color: var(--text);cursor:pointer">全选</label>
-          <span id="selected_count" style="color: var(--muted); margin-left: 12px;">已选择: 0</span>
+
+        <!-- 启用账号的内容 -->
+        <div id="status-enabled" class="tab-content active">
+          <div class="row" style="margin-bottom:12px">
+            <button onclick="loadAccounts()">刷新列表</button>
+            <input id="search_enabled" type="text" placeholder="🔍 搜索标签或ID..." onkeyup="applyFilters('enabled')" style="max-width:200px" />
+            <select id="filter_type_enabled" onchange="applyFilters('enabled')" style="max-width:150px">
+              <option value="all">全部类型</option>
+              <option value="amazonq">Amazon Q</option>
+              <option value="gemini">Gemini</option>
+              <option value="custom_api">Custom API</option>
+            </select>
+            <input id="filter_start_date_enabled" type="date" onchange="applyFilters('enabled')" placeholder="开始日期"
+              style="max-width:150px" />
+            <input id="filter_end_date_enabled" type="date" onchange="applyFilters('enabled')" placeholder="结束日期"
+              style="max-width:150px" />
+            <button class="btn-secondary" onclick="clearFilters('enabled')">清除筛选</button>
+          </div>
+          <div class="row" style="margin-bottom:12px">
+            <button class="btn-danger" onclick="batchDelete('enabled')" id="batch_delete_btn_enabled" style="display:none">删除选中</button>
+            <button class="btn-warning" onclick="testSelectedAccounts('enabled')" id="test_selected_btn_enabled"
+              style="display:none">测试选中</button>
+            <button class="btn-warning" onclick="testAllAccounts()">测试所有账号</button>
+            <button class="btn-warning" onclick="refreshAllTokens()">批量刷新 Token</button>
+            <button class="btn-secondary" onclick="exportAccounts(true, 'enabled')" id="export_selected_btn_enabled" style="display:none">导出选中</button>
+            <input id="test_message" placeholder="测试消息" value="Hello" style="max-width:200px" />
+            <div id="test_status" class="chip" style="display:none"></div>
+          </div>
+          <div id="test_results" style="margin-top:12px"></div>
+          <div class="row" style="margin-top:12px;align-items:center">
+            <input id="select_all_enabled" type="checkbox" class="account-checkbox" onchange="toggleSelectAll('enabled')" />
+            <label for="select_all_enabled" style="color: var(--text);cursor:pointer">全选</label>
+            <span id="selected_count_enabled" style="color: var(--muted); margin-left: 12px;">已选择: 0</span>
+            <span style="color: var(--muted); margin-left: 12px;">|</span>
+            <span id="total_count_enabled" style="color: var(--muted); margin-left: 12px;">总计: 0</span>
+          </div>
+          <div class="list" id="accounts_enabled"></div>
+          
+          <!-- 分页控件 -->
+          <div class="row" style="margin-top:16px;justify-content:center;align-items:center">
+            <button onclick="changePage('enabled', -1)" id="prev_btn_enabled" class="btn-secondary">← 上一页</button>
+            <span id="page_info_enabled" style="color: var(--text); margin: 0 16px;">第 1 页 / 共 1 页</span>
+            <button onclick="changePage('enabled', 1)" id="next_btn_enabled" class="btn-secondary">下一页 →</button>
+          </div>
         </div>
-        <div class="list" id="accounts"></div>
+
+        <!-- 禁用账号的内容 -->
+        <div id="status-disabled" class="tab-content">
+          <div class="row" style="margin-bottom:12px">
+            <button onclick="loadAccounts()">刷新列表</button>
+            <input id="search_disabled" type="text" placeholder="🔍 搜索标签或ID..." onkeyup="applyFilters('disabled')" style="max-width:200px" />
+            <select id="filter_type_disabled" onchange="applyFilters('disabled')" style="max-width:150px">
+              <option value="all">全部类型</option>
+              <option value="amazonq">Amazon Q</option>
+              <option value="gemini">Gemini</option>
+              <option value="custom_api">Custom API</option>
+            </select>
+            <input id="filter_start_date_disabled" type="date" onchange="applyFilters('disabled')" placeholder="开始日期"
+              style="max-width:150px" />
+            <input id="filter_end_date_disabled" type="date" onchange="applyFilters('disabled')" placeholder="结束日期"
+              style="max-width:150px" />
+            <button class="btn-secondary" onclick="clearFilters('disabled')">清除筛选</button>
+          </div>
+          <div class="row" style="margin-bottom:12px">
+            <button class="btn-danger" onclick="batchDelete('disabled')" id="batch_delete_btn_disabled" style="display:none">删除选中</button>
+            <button class="btn-warning" onclick="testSelectedAccounts('disabled')" id="test_selected_btn_disabled"
+              style="display:none">测试选中</button>
+            <button class="btn-warning" onclick="testAllAccounts('disabled')">测试所有账号</button>
+            <button class="btn-warning" onclick="refreshAllTokens('disabled')">批量刷新 Token</button>
+            <button class="btn-secondary" onclick="exportAccounts(true, 'disabled')" id="export_selected_btn_disabled" style="display:none">导出选中</button>
+            <input id="test_message_disabled" placeholder="测试消息" value="Hello" style="max-width:200px" />
+            <div id="test_status_disabled" class="chip" style="display:none"></div>
+          </div>
+          <div id="test_results_disabled" style="margin-top:12px"></div>
+          <div class="row" style="margin-top:12px;align-items:center">
+            <input id="select_all_disabled" type="checkbox" class="account-checkbox" onchange="toggleSelectAll('disabled')" />
+            <label for="select_all_disabled" style="color: var(--text);cursor:pointer">全选</label>
+            <span id="selected_count_disabled" style="color: var(--muted); margin-left: 12px;">已选择: 0</span>
+            <span style="color: var(--muted); margin-left: 12px;">|</span>
+            <span id="total_count_disabled" style="color: var(--muted); margin-left: 12px;">总计: 0</span>
+          </div>
+          <div class="list" id="accounts_disabled"></div>
+          
+          <!-- 分页控件 -->
+          <div class="row" style="margin-top:16px;justify-content:center;align-items:center">
+            <button onclick="changePage('disabled', -1)" id="prev_btn_disabled" class="btn-secondary">← 上一页</button>
+            <span id="page_info_disabled" style="color: var(--text); margin: 0 16px;">第 1 页 / 共 1 页</span>
+            <button onclick="changePage('disabled', 1)" id="next_btn_disabled" class="btn-secondary">下一页 →</button>
+          </div>
+        </div>
 
         <div class="divider"></div>
 
@@ -1594,15 +1662,24 @@
     }
 
     let allAccounts = [];
-    let selectedIds = new Set();
+    let selectedIdsEnabled = new Set();
+    let selectedIdsDisabled = new Set();
+    let currentAccountStatus = 'enabled';
+    let currentPageEnabled = 1;
+    let currentPageDisabled = 1;
+    const pageSize = 10;
 
-    function renderAccounts(list) {
-      const root = document.getElementById('accounts');
+    function renderAccounts(list, status) {
+      const root = document.getElementById('accounts_' + status);
+      
       root.innerHTML = '';
       if (!Array.isArray(list) || list.length === 0) {
         root.innerHTML = '<p style="color: var(--muted)">暂无账号</p>';
         return;
       }
+      
+      const selectedIds = status === 'enabled' ? selectedIdsEnabled : selectedIdsDisabled;
+      
       for (const acc of list) {
         const card = document.createElement('div');
         card.className = 'card';
@@ -1620,7 +1697,7 @@
           } else {
             selectedIds.delete(acc.id);
           }
-          updateSelectedCount();
+          updateSelectedCount(status);
         };
 
         const title = document.createElement('div');
@@ -1783,22 +1860,42 @@
       try {
         const r = await authFetch('/v2/accounts');
         allAccounts = await r.json();
-        applyFilters();
+        applyFilters('enabled');
+        applyFilters('disabled');
       } catch (e) {
         alert('加载失败：' + e);
       }
     }
 
-    function applyFilters() {
+    function applyFilters(status) {
       let filtered = [...allAccounts];
 
-      const filterType = document.getElementById('filter_type').value;
+      // 按启用/禁用状态过滤
+      filtered = filtered.filter(acc => {
+        if (status === 'enabled') return acc.enabled;
+        if (status === 'disabled') return !acc.enabled;
+        return true;
+      });
+
+      // 搜索过滤
+      const searchValue = document.getElementById('search_' + status).value.trim().toLowerCase();
+      if (searchValue) {
+        filtered = filtered.filter(acc => {
+          const label = (acc.label || '').toLowerCase();
+          const id = (acc.id || '').toLowerCase();
+          return label.includes(searchValue) || id.includes(searchValue);
+        });
+      }
+
+      // 类型过滤
+      const filterType = document.getElementById('filter_type_' + status).value;
       if (filterType !== 'all') {
         filtered = filtered.filter(acc => (acc.type || 'amazonq') === filterType);
       }
 
-      const startDate = document.getElementById('filter_start_date').value;
-      const endDate = document.getElementById('filter_end_date').value;
+      // 日期过滤
+      const startDate = document.getElementById('filter_start_date_' + status).value;
+      const endDate = document.getElementById('filter_end_date_' + status).value;
 
       if (startDate) {
         filtered = filtered.filter(acc => acc.created_at >= startDate);
@@ -1809,53 +1906,133 @@
         filtered = filtered.filter(acc => acc.created_at <= endDateTime);
       }
 
-      renderAccounts(filtered);
+      // 更新总数
+      document.getElementById('total_count_' + status).textContent = `总计: ${filtered.length}`;
+
+      // 分页
+      const currentPage = status === 'enabled' ? currentPageEnabled : currentPageDisabled;
+      const totalPages = Math.ceil(filtered.length / pageSize);
+      const startIdx = (currentPage - 1) * pageSize;
+      const endIdx = startIdx + pageSize;
+      const paginatedList = filtered.slice(startIdx, endIdx);
+
+      renderAccounts(paginatedList, status);
+      updatePagination(status, currentPage, totalPages);
     }
 
-    function clearFilters() {
-      document.getElementById('filter_type').value = 'all';
-      document.getElementById('filter_start_date').value = '';
-      document.getElementById('filter_end_date').value = '';
-      applyFilters();
+    function updatePagination(status, currentPage, totalPages) {
+      document.getElementById('page_info_' + status).textContent = `第 ${currentPage} 页 / 共 ${totalPages || 1} 页`;
+      document.getElementById('prev_btn_' + status).disabled = currentPage <= 1;
+      document.getElementById('next_btn_' + status).disabled = currentPage >= totalPages;
     }
 
-    function updateSelectedCount() {
+    function changePage(status, delta) {
+      if (status === 'enabled') {
+        currentPageEnabled = Math.max(1, currentPageEnabled + delta);
+      } else {
+        currentPageDisabled = Math.max(1, currentPageDisabled + delta);
+      }
+      applyFilters(status);
+    }
+
+    function clearFilters(status) {
+      document.getElementById('search_' + status).value = '';
+      document.getElementById('filter_type_' + status).value = 'all';
+      document.getElementById('filter_start_date_' + status).value = '';
+      document.getElementById('filter_end_date_' + status).value = '';
+      if (status === 'enabled') {
+        currentPageEnabled = 1;
+      } else {
+        currentPageDisabled = 1;
+      }
+      applyFilters(status);
+    }
+
+    function updateSelectedCount(status) {
+      const selectedIds = status === 'enabled' ? selectedIdsEnabled : selectedIdsDisabled;
       const count = selectedIds.size;
-      document.getElementById('selected_count').textContent = `已选择: ${count}`;
-      document.getElementById('batch_delete_btn').style.display = count > 0 ? 'inline-block' : 'none';
-      document.getElementById('test_selected_btn').style.display = count > 0 ? 'inline-block' : 'none';
-      document.getElementById('export_selected_btn').style.display = count > 0 ? 'inline-block' : 'none';
+      document.getElementById('selected_count_' + status).textContent = `已选择: ${count}`;
+      document.getElementById('batch_delete_btn_' + status).style.display = count > 0 ? 'inline-block' : 'none';
+      
+      if (status === 'enabled') {
+        document.getElementById('test_selected_btn_' + status).style.display = count > 0 ? 'inline-block' : 'none';
+      }
+      
+      document.getElementById('export_selected_btn_' + status).style.display = count > 0 ? 'inline-block' : 'none';
     }
 
-    function toggleSelectAll() {
-      const selectAll = document.getElementById('select_all').checked;
-      const root = document.getElementById('accounts');
-      const cards = root.querySelectorAll('.card');
-
+    function toggleSelectAll(status) {
+      const selectAll = document.getElementById('select_all_' + status).checked;
+      const selectedIds = status === 'enabled' ? selectedIdsEnabled : selectedIdsDisabled;
+      
       if (selectAll) {
-        cards.forEach((card, idx) => {
-          const acc = allAccounts.filter(a => {
-            const filterType = document.getElementById('filter_type').value;
-            const startDate = document.getElementById('filter_start_date').value;
-            const endDate = document.getElementById('filter_end_date').value;
-
-            if (filterType !== 'all' && (a.type || 'amazonq') !== filterType) return false;
-            if (startDate && a.created_at < startDate) return false;
-            if (endDate && a.created_at > endDate + 'T23:59:59') return false;
-            return true;
-          })[idx];
-
-          if (acc) selectedIds.add(acc.id);
+        // 选中当前页的所有账号
+        const root = document.getElementById('accounts_' + status);
+        const cards = root.querySelectorAll('.card');
+        
+        // 获取当前过滤后的账号列表
+        let filtered = [...allAccounts].filter(acc => {
+          if (status === 'enabled') return acc.enabled;
+          if (status === 'disabled') return !acc.enabled;
+          return true;
         });
+
+        // 应用搜索过滤
+        const searchValue = document.getElementById('search_' + status).value.trim().toLowerCase();
+        if (searchValue) {
+          filtered = filtered.filter(acc => {
+            const label = (acc.label || '').toLowerCase();
+            const id = (acc.id || '').toLowerCase();
+            return label.includes(searchValue) || id.includes(searchValue);
+          });
+        }
+
+        // 应用类型过滤
+        const filterType = document.getElementById('filter_type_' + status).value;
+        if (filterType !== 'all') {
+          filtered = filtered.filter(acc => (acc.type || 'amazonq') === filterType);
+        }
+
+        // 应用日期过滤
+        const startDate = document.getElementById('filter_start_date_' + status).value;
+        const endDate = document.getElementById('filter_end_date_' + status).value;
+        if (startDate) {
+          filtered = filtered.filter(acc => acc.created_at >= startDate);
+        }
+        if (endDate) {
+          const endDateTime = endDate + 'T23:59:59';
+          filtered = filtered.filter(acc => acc.created_at <= endDateTime);
+        }
+
+        // 获取当前页的账号
+        const currentPage = status === 'enabled' ? currentPageEnabled : currentPageDisabled;
+        const startIdx = (currentPage - 1) * pageSize;
+        const endIdx = startIdx + pageSize;
+        const paginatedList = filtered.slice(startIdx, endIdx);
+
+        paginatedList.forEach(acc => selectedIds.add(acc.id));
       } else {
         selectedIds.clear();
       }
 
-      applyFilters();
-      updateSelectedCount();
+      applyFilters(status);
+      updateSelectedCount(status);
     }
 
-    async function batchDelete() {
+    function switchAccountStatus(status) {
+      currentAccountStatus = status;
+      // 切换按钮激活状态
+      document.querySelectorAll('[data-status]').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.status === status);
+      });
+      // 切换内容显示
+      document.getElementById('status-enabled').classList.toggle('active', status === 'enabled');
+      document.getElementById('status-disabled').classList.toggle('active', status === 'disabled');
+    }
+
+    async function batchDelete(status) {
+      const selectedIds = status === 'enabled' ? selectedIdsEnabled : selectedIdsDisabled;
+      
       if (selectedIds.size === 0) {
         alert('请先选择要删除的账号');
         return;
@@ -1880,8 +2057,8 @@
       }
 
       selectedIds.clear();
-      document.getElementById('select_all').checked = false;
-      updateSelectedCount();
+      document.getElementById('select_all_' + status).checked = false;
+      updateSelectedCount(status);
 
       alert(`删除完成: ${success} 成功, ${failed} 失败`);
       await loadAccounts();
@@ -2321,20 +2498,22 @@
       if (failed === 0) document.getElementById('import_data').value = '';
     }
 
-    function setTestStatus(text, ok = true) {
-      const el = document.getElementById('test_status');
+    function setTestStatus(text, ok = true, status = 'enabled') {
+      const statusSuffix = status === 'enabled' ? '' : '_disabled';
+      const el = document.getElementById('test_status' + statusSuffix);
       el.textContent = text;
       el.className = ok ? 'chip success' : 'chip danger';
       el.style.display = 'inline-flex';
     }
 
-    async function exportAccounts(exportSelected = false) {
+    async function exportAccounts(exportSelected = false, status = null) {
       try {
         const r = await authFetch('/v2/accounts');
         let accounts = await r.json();
         
         // 如果指定导出选中的账号
-        if (exportSelected) {
+        if (exportSelected && status) {
+          const selectedIds = status === 'enabled' ? selectedIdsEnabled : selectedIdsDisabled;
           if (selectedIds.size === 0) {
             alert('请先选择要导出的账号');
             return;
@@ -2378,7 +2557,6 @@
     }
 
     async function testSingleAccount(accountId) {
-      const msg = document.getElementById('test_message').value.trim() || 'Hello';
       const accounts = await (await authFetch('/v2/accounts')).json();
       const acc = accounts.find(a => a.id === accountId);
 
@@ -2387,8 +2565,14 @@
         return;
       }
 
-      setTestStatus(`测试 ${acc.label}...`, true);
-      document.getElementById('test_results').innerHTML = '';
+      // 判断账号属于哪个 Tab
+      const status = acc.enabled ? 'enabled' : 'disabled';
+      const statusSuffix = status === 'enabled' ? '' : '_disabled';
+      const msgInputId = status === 'enabled' ? 'test_message' : 'test_message_disabled';
+      const msg = document.getElementById(msgInputId).value.trim() || 'Hello';
+
+      setTestStatus(`测试 ${acc.label}...`, true, status);
+      document.getElementById('test_results' + statusSuffix).innerHTML = '';
 
       try {
         // Custom API accounts use dedicated test endpoint
@@ -2405,13 +2589,13 @@
           const result = await r.json();
 
           if (result.success) {
-            setTestStatus(`测试成功`, true);
+            setTestStatus(`测试成功`, true, status);
             const details = result.details || {};
-            document.getElementById('test_results').innerHTML = `<div class="card"><div style="color:var(--success)">✓ ${acc.label}</div><div style="font-size:12px;margin-top:8px"><strong>API:</strong> ${details.api_base}<br><strong>模型:</strong> ${details.model}<br><strong>格式:</strong> ${details.format}<br><strong>响应:</strong> ${details.response_preview || '(无)'}</div></div>`;
+            document.getElementById('test_results' + statusSuffix).innerHTML = `<div class="card"><div style="color:var(--success)">✓ ${acc.label}</div><div style="font-size:12px;margin-top:8px"><strong>API:</strong> ${details.api_base}<br><strong>模型:</strong> ${details.model}<br><strong>格式:</strong> ${details.format}<br><strong>响应:</strong> ${details.response_preview || '(无)'}</div></div>`;
           } else {
-            setTestStatus(`测试失败`, false);
+            setTestStatus(`测试失败`, false, status);
             const details = result.details || {};
-            document.getElementById('test_results').innerHTML = `<div class="card"><div style="color:var(--danger)">✗ ${acc.label}</div><div style="font-size:12px;margin-top:8px">${result.error}<br><strong>API:</strong> ${details.api_base || 'N/A'}<br><strong>模型:</strong> ${details.model || 'N/A'}</div></div>`;
+            document.getElementById('test_results' + statusSuffix).innerHTML = `<div class="card"><div style="color:var(--danger)">✗ ${acc.label}</div><div style="font-size:12px;margin-top:8px">${result.error}<br><strong>API:</strong> ${details.api_base || 'N/A'}<br><strong>模型:</strong> ${details.model || 'N/A'}</div></div>`;
           }
           return;
         }
@@ -2428,7 +2612,8 @@
 
         const headers = {
           'content-type': 'application/json',
-          'X-Account-ID': accountId
+          'X-Account-ID': accountId,
+          'X-Test-Mode': 'true'  // 测试模式，允许测试禁用的账号
         };
         const sessionToken = getSessionToken();
         if (sessionToken) headers['X-Session-Token'] = sessionToken;
@@ -2445,8 +2630,8 @@
 
         if (!r.ok) {
           const errText = await r.text();
-          setTestStatus(`测试失败`, false);
-          document.getElementById('test_results').innerHTML = `<div class="card"><div style="color:var(--danger)">✗ ${acc.label}</div><div style="font-size:12px;margin-top:8px">${errText}</div></div>`;
+          setTestStatus(`测试失败`, false, status);
+          document.getElementById('test_results' + statusSuffix).innerHTML = `<div class="card"><div style="color:var(--danger)">✗ ${acc.label}</div><div style="font-size:12px;margin-top:8px">${errText}</div></div>`;
           return;
         }
 
@@ -2475,26 +2660,30 @@
           }
         }
 
-        setTestStatus(`测试成功`, true);
-        document.getElementById('test_results').innerHTML = `<div class="card"><div style="color:var(--success)">✓ ${acc.label}</div><div class="mono" style="font-size:12px;margin-top:8px">${text}</div></div>`;
+        setTestStatus(`测试成功`, true, status);
+        document.getElementById('test_results' + statusSuffix).innerHTML = `<div class="card"><div style="color:var(--success)">✓ ${acc.label}</div><div class="mono" style="font-size:12px;margin-top:8px">${text}</div></div>`;
       } catch (e) {
-        setTestStatus(`测试失败`, false);
-        document.getElementById('test_results').innerHTML = `<div class="card"><div style="color:var(--danger)">✗ ${acc.label}</div><div style="font-size:12px;margin-top:8px">${e}</div></div>`;
+        setTestStatus(`测试失败`, false, status);
+        document.getElementById('test_results' + statusSuffix).innerHTML = `<div class="card"><div style="color:var(--danger)">✗ ${acc.label}</div><div style="font-size:12px;margin-top:8px">${e}</div></div>`;
       }
     }
 
-    async function testSelectedAccounts() {
+    async function testSelectedAccounts(status) {
+      const selectedIds = status === 'enabled' ? selectedIdsEnabled : selectedIdsDisabled;
+      
       if (selectedIds.size === 0) {
         alert('请先选择要测试的账号');
         return;
       }
 
-      const msg = document.getElementById('test_message').value.trim() || 'Hello';
+      const msgInputId = status === 'enabled' ? 'test_message' : 'test_message_disabled';
+      const msg = document.getElementById(msgInputId).value.trim() || 'Hello';
       const accounts = await (await authFetch('/v2/accounts')).json();
       const toTest = accounts.filter(a => selectedIds.has(a.id));
 
-      setTestStatus(`测试 ${toTest.length} 个账号...`, true);
-      document.getElementById('test_results').innerHTML = '';
+      const statusSuffix = status === 'enabled' ? '' : '_disabled';
+      setTestStatus(`测试 ${toTest.length} 个账号...`, true, status);
+      document.getElementById('test_results' + statusSuffix).innerHTML = '';
 
       let success = 0, failed = 0;
       const results = [];
@@ -2517,7 +2706,8 @@
 
           const headers = {
             'content-type': 'application/json',
-            'X-Account-ID': acc.id
+            'X-Account-ID': acc.id,
+            'X-Test-Mode': 'true'  // 测试模式，允许测试禁用的账号
           };
           const sessionToken = getSessionToken();
           if (sessionToken) headers['X-Session-Token'] = sessionToken;
@@ -2535,7 +2725,7 @@
           if (!r.ok) {
             failed++;
             results.push(`<div class="card"><div style="color:var(--danger)">✗ ${acc.label}</div><div style="font-size:12px;margin-top:8px">${await r.text()}</div></div>`);
-            setTestStatus(`测试中... ${success + failed}/${toTest.length}`, true);
+            setTestStatus(`测试中... ${success + failed}/${toTest.length}`, true, status);
             continue;
           }
 
@@ -2566,34 +2756,42 @@
 
           success++;
           results.push(`<div class="card"><div style="color:var(--success)">✓ ${acc.label}</div><div class="mono" style="font-size:12px;margin-top:8px">${text.substring(0, 100)}${text.length > 100 ? '...' : ''}</div></div>`);
-          setTestStatus(`测试中... ${success + failed}/${toTest.length}`, true);
+          setTestStatus(`测试中... ${success + failed}/${toTest.length}`, true, status);
         } catch (e) {
           failed++;
           results.push(`<div class="card"><div style="color:var(--danger)">✗ ${acc.label}</div><div style="font-size:12px;margin-top:8px">${e}</div></div>`);
         }
       }
 
-      setTestStatus(`完成: ${success} 成功, ${failed} 失败`, failed === 0);
-      document.getElementById('test_results').innerHTML = results.join('');
+      setTestStatus(`完成: ${success} 成功, ${failed} 失败`, failed === 0, status);
+      document.getElementById('test_results' + statusSuffix).innerHTML = results.join('');
     }
 
-    async function testAllAccounts() {
-      const msg = document.getElementById('test_message').value.trim() || 'Hello';
+    async function testAllAccounts(status = 'enabled') {
+      const msgInputId = status === 'enabled' ? 'test_message' : 'test_message_disabled';
+      const msg = document.getElementById(msgInputId).value.trim() || 'Hello';
       const accounts = await (await authFetch('/v2/accounts')).json();
-      const enabled = accounts.filter(a => a.enabled);
+      
+      // 根据 status 过滤账号（不检查是否启用，只按 Tab 分类）
+      const filtered = accounts.filter(a => {
+        if (status === 'enabled') return a.enabled;
+        if (status === 'disabled') return !a.enabled;
+        return true;
+      });
 
-      if (enabled.length === 0) {
-        alert('没有启用的账号');
+      if (filtered.length === 0) {
+        alert(status === 'enabled' ? '没有启用的账号' : '没有禁用的账号');
         return;
       }
 
-      setTestStatus(`测试 ${enabled.length} 个账号...`, true);
-      document.getElementById('test_results').innerHTML = '';
+      const statusSuffix = status === 'enabled' ? '' : '_disabled';
+      setTestStatus(`测试 ${filtered.length} 个账号...`, true, status);
+      document.getElementById('test_results' + statusSuffix).innerHTML = '';
 
       let success = 0, failed = 0;
       const results = [];
 
-      for (const acc of enabled) {
+      for (const acc of filtered) {
         try {
           // Determine endpoint and model based on account type
           let endpoint, model;
@@ -2611,7 +2809,8 @@
 
           const headers = {
             'content-type': 'application/json',
-            'X-Account-ID': acc.id
+            'X-Account-ID': acc.id,
+            'X-Test-Mode': 'true'  // 测试模式，允许测试禁用的账号
           };
           const sessionToken = getSessionToken();
           if (sessionToken) headers['X-Session-Token'] = sessionToken;
@@ -2629,7 +2828,7 @@
           if (!r.ok) {
             failed++;
             results.push(`<div class="card"><div style="color:var(--danger)">✗ ${acc.label}</div><div style="font-size:12px;margin-top:8px">${await r.text()}</div></div>`);
-            setTestStatus(`测试中... ${success + failed}/${enabled.length}`, true);
+            setTestStatus(`测试中... ${success + failed}/${filtered.length}`, true, status);
             continue;
           }
 
@@ -2660,24 +2859,26 @@
 
           success++;
           results.push(`<div class="card"><div style="color:var(--success)">✓ ${acc.label}</div><div class="mono" style="font-size:12px;margin-top:8px">${text.substring(0, 100)}${text.length > 100 ? '...' : ''}</div></div>`);
-          setTestStatus(`测试中... ${success + failed}/${enabled.length}`, true);
+          setTestStatus(`测试中... ${success + failed}/${filtered.length}`, true, status);
         } catch (e) {
           failed++;
           results.push(`<div class="card"><div style="color:var(--danger)">✗ ${acc.label}</div><div style="font-size:12px;margin-top:8px">${e}</div></div>`);
         }
       }
 
-      setTestStatus(`完成: ${success} 成功, ${failed} 失败`, failed === 0);
-      document.getElementById('test_results').innerHTML = results.join('');
+      setTestStatus(`完成: ${success} 成功, ${failed} 失败`, failed === 0, status);
+      document.getElementById('test_results' + statusSuffix).innerHTML = results.join('');
     }
 
-    async function refreshAllTokens() {
-      if (!confirm('确认批量刷新所有 Amazon Q 账号的 Token？这将检测出所有被封禁的账号。')) {
+    async function refreshAllTokens(status = 'enabled') {
+      const statusText = status === 'enabled' ? '启用' : '禁用';
+      if (!confirm(`确认批量刷新所有${statusText}的 Amazon Q 账号的 Token？这将检测出所有被封禁的账号。`)) {
         return;
       }
 
-      setTestStatus('正在批量刷新 Token...', true);
-      document.getElementById('test_results').innerHTML = '';
+      const statusSuffix = status === 'enabled' ? '' : '_disabled';
+      setTestStatus('正在批量刷新 Token...', true, status);
+      document.getElementById('test_results' + statusSuffix).innerHTML = '';
 
       try {
         const r = await authFetch('/v2/accounts/refresh-all', { method: 'POST' });
@@ -2685,12 +2886,25 @@
 
         const data = await r.json();
 
+        // 根据 status 过滤结果
+        const filteredResults = data.results.filter(result => {
+          // 从 allAccounts 中找到对应的账号
+          const acc = allAccounts.find(a => a.label === result.label);
+          if (!acc) return false;
+          if (status === 'enabled') return acc.enabled;
+          if (status === 'disabled') return !acc.enabled;
+          return true;
+        });
+
         // 显示结果统计
-        setTestStatus(data.message, data.banned_count === 0);
+        const bannedCount = filteredResults.filter(r => r.status === 'banned').length;
+        const successCount = filteredResults.filter(r => r.status === 'success').length;
+        const message = `完成: ${successCount} 成功, ${bannedCount} 被封禁`;
+        setTestStatus(message, bannedCount === 0, status);
 
         // 显示详细结果
         const results = [];
-        for (const result of data.results) {
+        for (const result of filteredResults) {
           let color, icon;
           if (result.status === 'success') {
             color = 'var(--success)';
@@ -2706,12 +2920,12 @@
           results.push(`<div class="card"><div style="color:${color}">${icon} ${result.label}</div><div style="font-size:12px;margin-top:8px;color:var(--muted)">${result.message}</div></div>`);
         }
 
-        document.getElementById('test_results').innerHTML = results.join('');
+        document.getElementById('test_results' + statusSuffix).innerHTML = results.join('');
 
         // 刷新账号列表
         await loadAccounts();
       } catch (e) {
-        setTestStatus('批量刷新失败', false);
+        setTestStatus('批量刷新失败', false, status);
         alert('批量刷新失败：' + e.message);
       }
     }
@@ -2832,6 +3046,14 @@
       if (tabName === 'tokens' && !tokenDataLoaded) {
         fetchTokenUsageData();
         tokenDataLoaded = true;
+      }
+      // 切换到账号管理时，如果有数据则重新渲染
+      if (tabName === 'accounts' && allAccounts.length > 0) {
+        // 恢复内部账号状态 tab 的显示状态
+        switchAccountStatus(currentAccountStatus);
+        // 重新渲染两个 tab 的数据
+        applyFilters('enabled');
+        applyFilters('disabled');
       }
     }
 
