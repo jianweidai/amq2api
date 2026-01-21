@@ -46,6 +46,9 @@ from src.gemini.handler import handle_gemini_stream
 # Custom API 模块导入
 from src.custom_api.handler import handle_custom_api_request
 
+# Web Search 模块导入
+from src.amazonq.websearch import has_web_search_tool
+
 # Cache Manager 导入
 from src.processing.cache_manager import CacheManager, CacheResult
 
@@ -288,6 +291,123 @@ async def event_logging_batch():
     return {"status": "ok"}
 
 
+async def handle_websearch_request(request_data: dict, request: Request):
+    """
+    处理 Web Search 请求
+    
+    Args:
+        request_data: Claude API 请求数据
+        request: FastAPI Request 对象
+        
+    Returns:
+        StreamingResponse: SSE 流式响应
+    """
+    from src.amazonq.websearch import (
+        extract_search_query,
+        create_mcp_request,
+        parse_search_results,
+        generate_websearch_sse_events
+    )
+    
+    # 1. 提取搜索查询
+    query = extract_search_query(request_data)
+    if not query:
+        raise HTTPException(
+            status_code=400,
+            detail="无法从消息中提取搜索查询"
+        )
+    
+    logger.info(f"处理 Web Search 请求，查询: {query}")
+    
+    # 2. 创建 MCP 请求
+    tool_use_id, mcp_request = create_mcp_request(query)
+    
+    # 3. 获取账号和认证头
+    try:
+        # 使用智能账号分配器获取 Amazon Q 账号
+        distributor = get_account_distributor()
+        account = distributor.get_best_account(account_type="amazonq")
+        
+        from src.auth.auth import get_auth_headers_for_account
+        base_auth_headers = await get_auth_headers_for_account(account)
+        logger.info(f"使用账号: {account.get('id')} (label: {account.get('label', 'N/A')})")
+    except (DistributorNoAccountError, NoAccountAvailableError) as e:
+        logger.error(f"无可用账号: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="没有可用的 Amazon Q 账号"
+        )
+    except TokenRefreshError as e:
+        logger.error(f"Token 刷新失败: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail="Token 刷新失败"
+        )
+    
+    # 4. 构建 MCP API 请求头
+    mcp_headers = {
+        **base_auth_headers,
+        "Content-Type": "application/json",
+        "Accept": "*/*"
+    }
+    
+    # 5. 调用 MCP API
+    mcp_url = "https://q.us-east-1.amazonaws.com/mcp"
+    search_results = None
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                mcp_url,
+                json=mcp_request,
+                headers=mcp_headers
+            )
+            
+            if response.status_code == 200:
+                mcp_response = response.json()
+                logger.debug(f"MCP 响应: {mcp_response}")
+                search_results = parse_search_results(mcp_response)
+                
+                if search_results:
+                    logger.info(f"获取到 {len(search_results.results)} 条搜索结果")
+                else:
+                    logger.warning("MCP 响应解析失败")
+            else:
+                logger.warning(f"MCP API 调用失败: {response.status_code} {response.text}")
+    except Exception as e:
+        logger.error(f"MCP API 调用异常: {e}")
+    
+    # 6. 估算输入 tokens
+    try:
+        import tiktoken
+        enc = tiktoken.get_encoding("cl100k_base")
+        input_tokens = len(enc.encode(query))
+    except Exception:
+        input_tokens = len(query) // 4
+    
+    # 7. 生成 SSE 响应
+    model = request_data.get('model', 'claude-sonnet-4.5')
+    
+    async def event_generator():
+        async for event in generate_websearch_sse_events(
+            model=model,
+            query=query,
+            tool_use_id=tool_use_id,
+            search_results=search_results,
+            input_tokens=input_tokens
+        ):
+            yield event
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive"
+        }
+    )
+
+
 @app.post("/v1/messages")
 async def create_message(request: Request, _: bool = Depends(verify_api_key)):
     """
@@ -298,6 +418,11 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
         # 解析请求体
         request_data = await request.json()
         model = request_data.get('model', 'claude-sonnet-4.5')
+
+        # 检查是否为 Web Search 请求
+        if has_web_search_tool(request_data):
+            logger.info("检测到 Web Search 工具，路由到 Web Search 处理")
+            return await handle_websearch_request(request_data, request)
 
         # 智能路由：根据模型选择渠道
         specified_account_id = request.headers.get("X-Account-ID")
