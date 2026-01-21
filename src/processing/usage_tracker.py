@@ -223,7 +223,8 @@ def record_usage(
 def get_usage_summary(
     period: str = "day",
     account_id: Optional[str] = None,
-    model: Optional[str] = None
+    model: Optional[str] = None,
+    include_cost: bool = True
 ) -> Dict[str, Any]:
     """
     获取 token 使用量汇总
@@ -232,6 +233,7 @@ def get_usage_summary(
         period: 统计周期 (hour/day/week/month/all)
         account_id: 按账号筛选（可选）
         model: 按模型筛选（可选）
+        include_cost: 是否包含成本计算（默认 True）
     
     Returns:
         使用量汇总信息
@@ -303,7 +305,7 @@ def get_usage_summary(
                     """, params)
                     by_model = cursor.fetchall()
                     
-                    return {
+                    result = {
                         "period": period,
                         "start_time": start_str,
                         "request_count": summary["request_count"],
@@ -314,6 +316,16 @@ def get_usage_summary(
                         "cache_read_input_tokens": summary["total_cache_read_input_tokens"],
                         "by_model": list(by_model)
                     }
+                    
+                    # 计算成本
+                    if include_cost:
+                        from src.processing.pricing_calculator import calculate_usage_cost
+                        cost_data = calculate_usage_cost(result)
+                        result["total_cost"] = cost_data["total_cost"]
+                        result["currency"] = cost_data["currency"]
+                        result["model_costs"] = cost_data["model_costs"]
+                    
+                    return result
             finally:
                 conn.close()
         else:
@@ -350,7 +362,7 @@ def get_usage_summary(
                 """, params)
                 by_model = [dict(r) for r in cursor.fetchall()]
                 
-                return {
+                result = {
                     "period": period,
                     "start_time": start_str,
                     "request_count": summary.get("request_count", 0),
@@ -361,6 +373,16 @@ def get_usage_summary(
                     "cache_read_input_tokens": summary.get("total_cache_read_input_tokens", 0),
                     "by_model": by_model
                 }
+                
+                # 计算成本
+                if include_cost:
+                    from src.processing.pricing_calculator import calculate_usage_cost
+                    cost_data = calculate_usage_cost(result)
+                    result["total_cost"] = cost_data["total_cost"]
+                    result["currency"] = cost_data["currency"]
+                    result["model_costs"] = cost_data["model_costs"]
+                
+                return result
     except Exception as e:
         logger.error(f"获取使用量汇总失败: {e}")
         return {

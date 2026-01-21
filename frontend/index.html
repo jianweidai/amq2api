@@ -1756,6 +1756,76 @@
         }
         row('权重', `${acc.weight || 50}（越大优先级越高，建议1-100）`);
         row('创建时间', acc.created_at || 'N/A');
+        
+        // 添加统计信息占位符
+        const statsKeyToday = document.createElement('div');
+        statsKeyToday.className = 'key';
+        statsKeyToday.textContent = '今日调用';
+        const statsValToday = document.createElement('div');
+        statsValToday.className = 'value';
+        statsValToday.id = `stats-today-${acc.id}`;
+        statsValToday.textContent = '加载中...';
+        statsValToday.style.color = 'var(--muted)';
+        meta.appendChild(statsKeyToday);
+        meta.appendChild(statsValToday);
+        
+        const statsKeyMonth = document.createElement('div');
+        statsKeyMonth.className = 'key';
+        statsKeyMonth.textContent = '本月调用';
+        const statsValMonth = document.createElement('div');
+        statsValMonth.className = 'value';
+        statsValMonth.id = `stats-month-${acc.id}`;
+        statsValMonth.textContent = '加载中...';
+        statsValMonth.style.color = 'var(--muted)';
+        meta.appendChild(statsKeyMonth);
+        meta.appendChild(statsValMonth);
+        
+        const tokenKeyToday = document.createElement('div');
+        tokenKeyToday.className = 'key';
+        tokenKeyToday.textContent = '今日 Token';
+        const tokenValToday = document.createElement('div');
+        tokenValToday.className = 'value';
+        tokenValToday.id = `token-today-${acc.id}`;
+        tokenValToday.textContent = '加载中...';
+        tokenValToday.style.color = 'var(--muted)';
+        meta.appendChild(tokenKeyToday);
+        meta.appendChild(tokenValToday);
+        
+        const tokenKeyMonth = document.createElement('div');
+        tokenKeyMonth.className = 'key';
+        tokenKeyMonth.textContent = '本月 Token';
+        const tokenValMonth = document.createElement('div');
+        tokenValMonth.className = 'value';
+        tokenValMonth.id = `token-month-${acc.id}`;
+        tokenValMonth.textContent = '加载中...';
+        tokenValMonth.style.color = 'var(--muted)';
+        meta.appendChild(tokenKeyMonth);
+        meta.appendChild(tokenValMonth);
+        
+        const costKeyToday = document.createElement('div');
+        costKeyToday.className = 'key';
+        costKeyToday.textContent = '今日花费';
+        const costValToday = document.createElement('div');
+        costValToday.className = 'value';
+        costValToday.id = `cost-today-${acc.id}`;
+        costValToday.textContent = '加载中...';
+        costValToday.style.color = 'var(--muted)';
+        meta.appendChild(costKeyToday);
+        meta.appendChild(costValToday);
+        
+        const costKeyMonth = document.createElement('div');
+        costKeyMonth.className = 'key';
+        costKeyMonth.textContent = '本月花费';
+        const costValMonth = document.createElement('div');
+        costValMonth.className = 'value';
+        costValMonth.id = `cost-month-${acc.id}`;
+        costValMonth.textContent = '加载中...';
+        costValMonth.style.color = 'var(--muted)';
+        meta.appendChild(costKeyMonth);
+        meta.appendChild(costValMonth);
+        
+        // 异步加载统计数据
+        loadAccountStats(acc.id);
         if (acc.type === 'custom_api') {
           row('API Base', other.api_base || 'N/A');
           row('Model', other.model || 'N/A');
@@ -3032,6 +3102,91 @@
       }
     }
 
+    // ==================== 账号统计数据加载 ====================
+    
+    async function loadAccountStats(accountId) {
+      try {
+        const response = await authFetch(`/v2/accounts/${accountId}/stats`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const stats = await response.json();
+        
+        // 更新今日调用次数
+        const todayEl = document.getElementById(`stats-today-${accountId}`);
+        if (todayEl) {
+          const todayCount = stats.token_usage?.today?.request_count || 0;
+          todayEl.textContent = `${todayCount} 次`;
+          todayEl.style.color = 'var(--text)';
+        }
+        
+        // 更新本月调用次数
+        const monthEl = document.getElementById(`stats-month-${accountId}`);
+        if (monthEl) {
+          const monthCount = stats.token_usage?.this_month?.request_count || 0;
+          monthEl.textContent = `${monthCount} 次`;
+          monthEl.style.color = 'var(--text)';
+        }
+        
+        // 更新今日 Token 用量
+        const tokenTodayEl = document.getElementById(`token-today-${accountId}`);
+        if (tokenTodayEl) {
+          const todayTokens = stats.token_usage?.today || {};
+          const totalToday = todayTokens.total_tokens || 0;
+          const inputToday = todayTokens.input_tokens || 0;
+          const outputToday = todayTokens.output_tokens || 0;
+          tokenTodayEl.innerHTML = `${formatNumber(totalToday)} <span style="color:var(--muted);font-size:11px">(输入: ${formatNumber(inputToday)} | 输出: ${formatNumber(outputToday)})</span>`;
+          tokenTodayEl.style.color = 'var(--text)';
+        }
+        
+        // 更新本月 Token 用量
+        const tokenMonthEl = document.getElementById(`token-month-${accountId}`);
+        if (tokenMonthEl) {
+          const monthTokens = stats.token_usage?.this_month || {};
+          const totalMonth = monthTokens.total_tokens || 0;
+          const inputMonth = monthTokens.input_tokens || 0;
+          const outputMonth = monthTokens.output_tokens || 0;
+          tokenMonthEl.innerHTML = `${formatNumber(totalMonth)} <span style="color:var(--muted);font-size:11px">(输入: ${formatNumber(inputMonth)} | 输出: ${formatNumber(outputMonth)})</span>`;
+          tokenMonthEl.style.color = 'var(--text)';
+        }
+        
+        // 更新今日花费
+        const costTodayEl = document.getElementById(`cost-today-${accountId}`);
+        if (costTodayEl) {
+          const todayCost = stats.token_usage?.today?.total_cost || 0;
+          costTodayEl.textContent = formatCost(todayCost);
+          costTodayEl.style.color = 'var(--text)';
+        }
+        
+        // 更新本月花费
+        const costMonthEl = document.getElementById(`cost-month-${accountId}`);
+        if (costMonthEl) {
+          const monthCost = stats.token_usage?.this_month?.total_cost || 0;
+          costMonthEl.textContent = formatCost(monthCost);
+          costMonthEl.style.color = 'var(--text)';
+        }
+      } catch (error) {
+        console.error(`加载账号 ${accountId} 统计数据失败:`, error);
+        // 更新为错误状态
+        ['stats-today', 'stats-month', 'token-today', 'token-month', 'cost-today', 'cost-month'].forEach(prefix => {
+          const el = document.getElementById(`${prefix}-${accountId}`);
+          if (el) {
+            el.textContent = '加载失败';
+            el.style.color = 'var(--danger)';
+          }
+        });
+      }
+    }
+    
+    // 格式化成本显示
+    function formatCost(cost) {
+      if (cost === null || cost === undefined || isNaN(cost)) return '$0.00';
+      cost = Number(cost);
+      if (cost < 0.01) return `$${cost.toFixed(4)}`;
+      if (cost < 1) return `$${cost.toFixed(3)}`;
+      return `$${cost.toFixed(2)}`;
+    }
+
     // ==================== Tab 切换功能 ====================
     function switchTab(tabName) {
       // 切换按钮激活状态
@@ -3078,15 +3233,17 @@
       const grid = document.getElementById('stats-grid');
       const cacheTotal = (data.cache_read_input_tokens || 0) + (data.cache_creation_input_tokens || 0);
       const cacheHitRatio = cacheTotal === 0 ? 0 : ((data.cache_read_input_tokens || 0) / cacheTotal) * 100;
+      const totalCost = data.total_cost || 0;
 
       const cards = [
+        { icon: '💰', iconClass: 'green', label: '总花费', value: formatCost(totalCost), sub: `基于 Anthropic 官方定价 (仅 4.5 系列)` },
         { icon: '📊', iconClass: 'blue', label: '总 Token 消耗', value: formatNumber(data.total_tokens || 0), sub: `输入: <span>${formatNumber(data.input_tokens || 0)}</span> | 输出: <span>${formatNumber(data.output_tokens || 0)}</span>` },
-        { icon: '📨', iconClass: 'green', label: '请求次数', value: formatNumber(data.request_count || 0), sub: `统计周期: <span>${getPeriodLabel(currentPeriod)}</span>` },
+        { icon: '📨', iconClass: 'purple', label: '请求次数', value: formatNumber(data.request_count || 0), sub: `统计周期: <span>${getPeriodLabel(currentPeriod)}</span>` },
         { icon: '📥', iconClass: 'cyan', label: '输入 Token', value: formatNumber(data.input_tokens || 0), sub: `占比: <span>${data.total_tokens ? ((data.input_tokens / data.total_tokens) * 100).toFixed(1) : 0}%</span>` },
-        { icon: '📤', iconClass: 'purple', label: '输出 Token', value: formatNumber(data.output_tokens || 0), sub: `占比: <span>${data.total_tokens ? ((data.output_tokens / data.total_tokens) * 100).toFixed(1) : 0}%</span>` },
+        { icon: '📤', iconClass: 'pink', label: '输出 Token', value: formatNumber(data.output_tokens || 0), sub: `占比: <span>${data.total_tokens ? ((data.output_tokens / data.total_tokens) * 100).toFixed(1) : 0}%</span>` },
         { icon: '💾', iconClass: 'orange', label: '缓存创建 Token', value: formatNumber(data.cache_creation_input_tokens || 0), sub: '首次缓存消耗' },
         { icon: '⚡', iconClass: 'yellow', label: '缓存读取 Token', value: formatNumber(data.cache_read_input_tokens || 0), sub: '从缓存读取' },
-        { icon: '🎯', iconClass: 'pink', label: '缓存命中率', value: cacheHitRatio.toFixed(1) + '%', sub: `创建: <span>${formatNumber(data.cache_creation_input_tokens || 0)}</span> | 读取: <span>${formatNumber(data.cache_read_input_tokens || 0)}</span>` }
+        { icon: '🎯', iconClass: 'blue', label: '缓存命中率', value: cacheHitRatio.toFixed(1) + '%', sub: `创建: <span>${formatNumber(data.cache_creation_input_tokens || 0)}</span> | 读取: <span>${formatNumber(data.cache_read_input_tokens || 0)}</span>` }
       ];
 
       grid.innerHTML = cards.map(card => `

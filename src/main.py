@@ -1430,9 +1430,10 @@ async def get_account_quota(account_id: str, _: bool = Depends(verify_admin_key)
 
 @app.get("/v2/accounts/{account_id}/stats")
 async def get_account_stats(account_id: str, _: bool = Depends(verify_admin_key)):
-    """获取账号调用统计信息"""
+    """获取账号调用统计信息（包含 token 用量）"""
     try:
         from src.auth.account_manager import get_account_call_stats, get_account_cooldown_remaining
+        from src.processing.usage_tracker import get_usage_summary
         
         account = get_account(account_id)
         if not account:
@@ -1446,7 +1447,36 @@ async def get_account_stats(account_id: str, _: bool = Depends(verify_admin_key)
         stats["cooldown_remaining_seconds"] = cooldown_remaining
         stats["is_in_cooldown"] = cooldown_remaining > 0
         
+        # 获取 token 用量统计（当天和当月）
+        day_usage = get_usage_summary(period="day", account_id=account_id, include_cost=True)
+        month_usage = get_usage_summary(period="month", account_id=account_id, include_cost=True)
+        
+        stats["token_usage"] = {
+            "today": {
+                "request_count": day_usage.get("request_count", 0),
+                "input_tokens": day_usage.get("input_tokens", 0),
+                "output_tokens": day_usage.get("output_tokens", 0),
+                "total_tokens": day_usage.get("total_tokens", 0),
+                "cache_creation_input_tokens": day_usage.get("cache_creation_input_tokens", 0),
+                "cache_read_input_tokens": day_usage.get("cache_read_input_tokens", 0),
+                "total_cost": day_usage.get("total_cost", 0),
+                "currency": day_usage.get("currency", "USD"),
+            },
+            "this_month": {
+                "request_count": month_usage.get("request_count", 0),
+                "input_tokens": month_usage.get("input_tokens", 0),
+                "output_tokens": month_usage.get("output_tokens", 0),
+                "total_tokens": month_usage.get("total_tokens", 0),
+                "cache_creation_input_tokens": month_usage.get("cache_creation_input_tokens", 0),
+                "cache_read_input_tokens": month_usage.get("cache_read_input_tokens", 0),
+                "total_cost": month_usage.get("total_cost", 0),
+                "currency": month_usage.get("currency", "USD"),
+            }
+        }
+        
         return JSONResponse(content=stats)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"获取账号统计失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取账号统计失败: {str(e)}")
