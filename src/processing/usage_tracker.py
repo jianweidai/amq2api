@@ -241,13 +241,18 @@ def get_usage_summary(
     # 计算时间范围
     now = datetime.now(timezone.utc)
     if period == "hour":
+        # 最近1小时
         start_time = now - timedelta(hours=1)
     elif period == "day":
-        start_time = now - timedelta(days=1)
+        # 今日（自然日）：今天 00:00:00 开始
+        start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
     elif period == "week":
-        start_time = now - timedelta(weeks=1)
+        # 本周（自然周）：本周一 00:00:00 开始
+        start_time = now - timedelta(days=now.weekday())
+        start_time = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
     elif period == "month":
-        start_time = now - timedelta(days=30)
+        # 本月（自然月）：本月1号 00:00:00 开始
+        start_time = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     else:  # all
         start_time = datetime(2000, 1, 1, tzinfo=timezone.utc)
     
