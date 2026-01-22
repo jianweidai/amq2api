@@ -78,6 +78,8 @@ async def lifespan(app: FastAPI):
                 ttl_seconds=config.cache_ttl_seconds,
                 max_entries=config.max_cache_entries
             )
+            # 阶段 1: 启动后台清理任务
+            await _cache_manager.start_background_cleanup()
             logger.info(f"Prompt Caching 模拟已启用 (TTL: {config.cache_ttl_seconds}s, Max Entries: {config.max_cache_entries})")
         else:
             logger.info("Prompt Caching 模拟已禁用")
@@ -104,6 +106,11 @@ async def lifespan(app: FastAPI):
 
     # 关闭时清理资源
     logger.info("正在关闭服务...")
+    
+    # 阶段 1: 停止缓存后台清理任务
+    if _cache_manager is not None:
+        logger.info("正在停止缓存后台清理任务...")
+        await _cache_manager.stop_background_cleanup()
     
     # 取消定时刷新任务
     if refresh_task is not None:
@@ -283,6 +290,44 @@ async def health():
             "reason": "system_error",
             "error": str(e)
         }
+
+
+@app.get("/admin/cache/stats")
+async def get_cache_stats():
+    """
+    阶段 2: 获取缓存统计信息和内存使用情况
+    
+    Returns:
+        缓存统计信息，包括命中率、内存使用等
+    """
+    if not _cache_manager:
+        return {
+            "enabled": False,
+            "message": "Prompt Caching 模拟未启用"
+        }
+    
+    stats = _cache_manager.get_statistics()
+    memory = _cache_manager.estimate_memory_usage()
+    
+    return {
+        "enabled": True,
+        "size": _cache_manager.size,
+        "max_entries": _cache_manager.max_entries,
+        "ttl_seconds": _cache_manager.ttl,
+        "hit_rate": f"{stats.hit_rate * 100:.2f}%",
+        "hits": stats.hit_count,
+        "misses": stats.miss_count,
+        "evictions": stats.eviction_count,
+        "total_requests": stats.total_requests,
+        "memory": {
+            "bytes": memory['bytes'],
+            "mb": memory['mb'],
+            "warning": memory['warning'],
+            "critical": memory['critical'],
+            "warning_threshold_mb": _cache_manager.MEMORY_WARNING_THRESHOLD_MB,
+            "critical_threshold_mb": _cache_manager.MEMORY_CRITICAL_THRESHOLD_MB
+        }
+    }
 
 
 @app.post("/api/event_logging/batch")
@@ -858,7 +903,11 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
             if cacheable_content and token_count > 0:
                 # 计算缓存键并检查缓存
                 cache_key = _cache_manager.calculate_cache_key(cacheable_content)
-                cache_result = _cache_manager.check_cache(cache_key, token_count)
+                cache_result = await _cache_manager.check_cache_async(
+                    cache_key, 
+                    token_count,
+                    len(cacheable_content)
+                )
                 
                 cache_creation_input_tokens = cache_result.cache_creation_input_tokens
                 cache_read_input_tokens = cache_result.cache_read_input_tokens
@@ -1171,7 +1220,11 @@ async def create_gemini_message(request: Request, _: bool = Depends(verify_api_k
             if cacheable_content and token_count > 0:
                 # 计算缓存键并检查缓存
                 cache_key = _cache_manager.calculate_cache_key(cacheable_content)
-                cache_result = _cache_manager.check_cache(cache_key, token_count)
+                cache_result = await _cache_manager.check_cache_async(
+                    cache_key, 
+                    token_count,
+                    len(cacheable_content)
+                )
                 
                 gemini_cache_creation_input_tokens = cache_result.cache_creation_input_tokens
                 gemini_cache_read_input_tokens = cache_result.cache_read_input_tokens
@@ -1279,7 +1332,11 @@ async def create_custom_api_message(request: Request, _: bool = Depends(verify_a
             if cacheable_content and token_count > 0:
                 # 计算缓存键并检查缓存
                 cache_key = _cache_manager.calculate_cache_key(cacheable_content)
-                cache_result = _cache_manager.check_cache(cache_key, token_count)
+                cache_result = await _cache_manager.check_cache_async(
+                    cache_key, 
+                    token_count,
+                    len(cacheable_content)
+                )
                 
                 cache_creation_input_tokens = cache_result.cache_creation_input_tokens
                 cache_read_input_tokens = cache_result.cache_read_input_tokens
@@ -2693,7 +2750,7 @@ async def get_usage(
     _: bool = Depends(verify_api_key)
 ):
     """
-    获取 token 使用量统计
+    获取 token 使用量统计（包含缓存统计）
     
     Query Parameters:
         period: 统计周期 (hour/day/week/month/all)，默认 day
@@ -2701,9 +2758,17 @@ async def get_usage(
         model: 按模型筛选（可选）
     
     Returns:
-        使用量汇总信息，包含总计和按模型分组的统计
+        使用量汇总信息，包含总计、按模型分组的统计和缓存统计
     """
-    return get_usage_summary(period=period, account_id=account_id, model=model)
+    usage_data = get_usage_summary(period=period, account_id=account_id, model=model)
+    
+    # 添加缓存统计信息
+    if _cache_manager is not None:
+        usage_data["cache"] = _cache_manager.export_statistics()
+    else:
+        usage_data["cache"] = {"enabled": False}
+    
+    return usage_data
 
 
 @app.get("/v1/usage/recent")

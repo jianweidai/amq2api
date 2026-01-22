@@ -22,13 +22,14 @@ class TestCacheKeyDeterminism:
     @given(content=st.text(min_size=0, max_size=10000))
     @settings(max_examples=100)
     def test_cache_key_is_sha256(self, content: str):
-        """Cache key should be the SHA-256 hash of the content."""
+        """Cache key should be the SHA-256 hash:length format."""
         cm = CacheManager()
         
         key = cm.calculate_cache_key(content)
-        expected = hashlib.sha256(content.encode('utf-8')).hexdigest()
+        expected_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
+        expected_key = f"{expected_hash}:{len(content)}"
         
-        assert key == expected, f"Cache key {key} does not match expected SHA-256 {expected}"
+        assert key == expected_key, f"Cache key {key} does not match expected {expected_key}"
     
     @given(content=st.text(min_size=0, max_size=10000))
     @settings(max_examples=100)
@@ -57,13 +58,25 @@ class TestCacheKeyDeterminism:
     @given(content=st.text(min_size=1, max_size=10000))
     @settings(max_examples=100)
     def test_cache_key_is_64_hex_chars(self, content: str):
-        """Cache key should be a 64-character hexadecimal string (SHA-256 output)."""
+        """Cache key should be in format 'hash:length' where hash is 64 hex chars."""
         cm = CacheManager()
         
         key = cm.calculate_cache_key(content)
         
-        assert len(key) == 64, f"Cache key length is {len(key)}, expected 64"
-        assert all(c in '0123456789abcdef' for c in key), f"Cache key contains non-hex characters: {key}"
+        # 验证格式：hash:length
+        assert ':' in key, f"Cache key should contain ':' separator: {key}"
+        parts = key.split(':')
+        assert len(parts) == 2, f"Cache key should have exactly 2 parts: {key}"
+        
+        hash_part, length_part = parts
+        
+        # 验证哈希部分是 64 个十六进制字符
+        assert len(hash_part) == 64, f"Hash part length is {len(hash_part)}, expected 64"
+        assert all(c in '0123456789abcdef' for c in hash_part), f"Hash part contains non-hex characters: {hash_part}"
+        
+        # 验证长度部分是数字
+        assert length_part.isdigit(), f"Length part should be a number: {length_part}"
+        assert int(length_part) == len(content), f"Length part {length_part} doesn't match content length {len(content)}"
 
 
 class TestCacheMissBehavior:

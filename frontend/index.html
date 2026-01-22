@@ -750,7 +750,10 @@
   <div id="main-container" class="container" style="display:none">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
       <h1>Admin 管理</h1>
-      <button onclick="logout()" class="btn-secondary" style="font-size: 14px;">🚪 退出登录</button>
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <a href="/dashboard" style="background: var(--accent); color: white; border: none; border-radius: 10px; padding: 10px 20px; font-size: 14px; font-weight: 500; text-decoration: none; transition: all 0.2s; display: inline-block;">📊 缓存统计</a>
+        <button onclick="logout()" class="btn-secondary" style="font-size: 14px;">🚪 退出登录</button>
+      </div>
     </div>
     <p style="color: var(--muted); margin-bottom: 32px;">管理 Amazon Q、Gemini 和 Custom API 账号</p>
 

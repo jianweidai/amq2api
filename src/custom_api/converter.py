@@ -734,25 +734,69 @@ def _is_thinking_enabled(claude_req: ClaudeRequest) -> bool:
 
 
 
+def _filter_reserved_keywords(system_prompt: str) -> str:
+    """
+    从 system prompt 中过滤掉保留关键字
+    
+    某些 API 提供商（如 Bedrock）不允许在 system prompt 中使用特定的保留关键字。
+    这个函数会移除包含这些关键字的整行内容。
+    
+    Args:
+        system_prompt: 原始 system prompt
+    
+    Returns:
+        过滤后的 system prompt
+    """
+    import re
+    
+    if not system_prompt:
+        return system_prompt
+    
+    # 定义保留关键字列表（不区分大小写）
+    reserved_keywords = [
+        r"x-anthropic-billing-header",
+        r"anthropic-billing",
+        r"billing-header",
+    ]
+    
+    filtered_prompt = system_prompt
+    
+    # 移除包含保留关键字的整行
+    for keyword in reserved_keywords:
+        # 匹配包含关键字的整行（包括前后的空白）
+        pattern = rf"^.*{keyword}.*$"
+        filtered_prompt = re.sub(pattern, "", filtered_prompt, flags=re.IGNORECASE | re.MULTILINE)
+    
+    # 清理多余的空行
+    filtered_prompt = re.sub(r'\n\s*\n\s*\n', '\n\n', filtered_prompt)
+    filtered_prompt = filtered_prompt.strip()
+    
+    return filtered_prompt
+
+
 def _extract_system_content(system: Union[str, List[Dict[str, Any]]]) -> str:
     """
-    从 Claude system 字段提取文本内容
+    从 Claude system 字段提取文本内容，并过滤保留关键字
 
     Args:
         system: Claude system 字段，可以是字符串或内容块列表
 
     Returns:
-        提取的系统提示文本
+        提取并过滤后的系统提示文本
     """
+    system_text = ""
+    
     if isinstance(system, str):
-        return system
+        system_text = system
     elif isinstance(system, list):
         text_parts = []
         for item in system:
             if isinstance(item, dict) and item.get("type") == "text":
                 text_parts.append(item.get("text", ""))
-        return "\n".join(text_parts)
-    return ""
+        system_text = "\n".join(text_parts)
+    
+    # 过滤保留关键字
+    return _filter_reserved_keywords(system_text)
 
 
 def convert_claude_messages_to_openai(messages: List[Any], thinking_enabled: bool = False) -> List[Dict[str, Any]]:
