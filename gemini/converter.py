@@ -470,13 +470,46 @@ def clean_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     # 需要完全移除的字段（Gemini 不支持这些 JSON Schema 扩展）
-    fields_to_remove = {"$schema", "additionalProperties", "propertyNames", "patternProperties", "unevaluatedProperties"}
+    fields_to_remove = {
+        "$schema", "additionalProperties", "propertyNames", "patternProperties",
+        "unevaluatedProperties", "const", "anyOf", "oneOf", "allOf", "not",
+        "$ref", "$defs", "definitions", "if", "then", "else", "dependentSchemas",
+        "dependentRequired", "prefixItems", "contains", "unevaluatedItems"
+    }
 
     # 收集验证信息
     validations = []
     for field, label in validation_fields.items():
         if field in schema:
             validations.append(f"{label}: {schema[field]}")
+
+    # 处理 const: 将其值添加到 description
+    if "const" in schema:
+        const_value = schema["const"]
+        validations.append(f"must be exactly: {const_value}")
+
+    # 处理 anyOf/oneOf: 提取类型信息添加到 description
+    for combo_field in ["anyOf", "oneOf", "allOf"]:
+        if combo_field in schema:
+            combo_types = []
+            for item in schema[combo_field]:
+                if isinstance(item, dict):
+                    if "type" in item:
+                        combo_types.append(str(item["type"]))
+                    elif "const" in item:
+                        combo_types.append(f"'{item['const']}'")
+            if combo_types:
+                validations.append(f"{combo_field}: {' | '.join(combo_types)}")
+
+    # 处理 type 为数组的情况 (例如 ["string", "null"])
+    schema_type = schema.get("type")
+    if isinstance(schema_type, list):
+        # 取第一个非 null 的类型
+        primary_type = next((t for t in schema_type if t != "null"), schema_type[0] if schema_type else "string")
+        if "null" in schema_type:
+            validations.append("nullable")
+        schema = dict(schema)
+        schema["type"] = primary_type
 
     # 递归清理 schema
     cleaned = {}
@@ -487,6 +520,10 @@ def clean_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
         if key == "description" and validations:
             # 将验证要求追加到 description
             cleaned[key] = f"{value} ({', '.join(validations)})"
+        elif key == "type" and isinstance(value, list):
+            # 已在上面处理过
+            primary_type = next((t for t in value if t != "null"), value[0] if value else "string")
+            cleaned[key] = primary_type
         elif isinstance(value, dict):
             cleaned[key] = clean_json_schema(value)
         elif isinstance(value, list):
