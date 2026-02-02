@@ -659,7 +659,7 @@ async def create_gemini_message(request: Request, _: bool = Depends(verify_api_k
         headers = {
             **auth_headers,
             "Content-Type": "application/json",
-            "User-Agent": "antigravity/1.11.3 darwin/arm64",
+            "User-Agent": "antigravity/1.15.8 linux/arm64",
             "Accept-Encoding": "gzip"
         }
 

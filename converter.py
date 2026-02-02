@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 
 THINKING_START_TAG = "<thinking>"
 THINKING_END_TAG = "</thinking>"
-# THINKING_HINT = "<thinking_mode>interleaved</thinking_mode><max_thinking_length>16000</max_thinking_length>"
-THINKING_HINT = "<antml:thinking_mode>interleaved</antml:thinking_mode><antml:max_thinking_length>16000</antml:max_thinking_length><antml:thinking_mode>interleaved</antml:thinking_mode><antml:max_thinking_length>16000</antml:max_thinking_length>"
+THINKING_HINT = "<thinking_mode>interleaved</thinking_mode><max_thinking_length>16000</max_thinking_length>"
+# THINKING_HINT = "<antml:thinking_mode>interleaved</antml:thinking_mode><antml:max_thinking_length>16000</antml:max_thinking_length><antml:thinking_mode>interleaved</antml:thinking_mode><antml:max_thinking_length>16000</antml:max_thinking_length>"
 
 
 def get_current_timestamp() -> str:
