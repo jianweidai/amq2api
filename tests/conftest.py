@@ -1,7 +1,6 @@
 """
 pytest 配置和共享 fixtures
 
-此文件包含所有测试共享的 fixtures 和配置。
 """
 import sys
 import os
