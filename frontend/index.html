@@ -806,6 +806,7 @@
             <button class="btn-warning" onclick="testAllAccounts()">测试所有账号</button>
             <button class="btn-warning" onclick="refreshAllTokens()">批量刷新 Token</button>
             <button class="btn-secondary" onclick="exportAccounts(true, 'enabled')" id="export_selected_btn_enabled" style="display:none">导出选中</button>
+            <button class="btn-secondary" onclick="exportKiroGateJson(true, 'enabled')" id="export_kirogate_selected_btn_enabled" style="display:none">导出选中 KiroGate JSON</button>
             <input id="test_message" placeholder="测试消息" value="Hello" style="max-width:200px" />
             <div id="test_status" class="chip" style="display:none"></div>
           </div>
@@ -851,6 +852,7 @@
             <button class="btn-warning" onclick="testAllAccounts('disabled')">测试所有账号</button>
             <button class="btn-warning" onclick="refreshAllTokens('disabled')">批量刷新 Token</button>
             <button class="btn-secondary" onclick="exportAccounts(true, 'disabled')" id="export_selected_btn_disabled" style="display:none">导出选中</button>
+            <button class="btn-secondary" onclick="exportKiroGateJson(true, 'disabled')" id="export_kirogate_selected_btn_disabled" style="display:none">导出选中 KiroGate JSON</button>
             <input id="test_message_disabled" placeholder="测试消息" value="Hello" style="max-width:200px" />
             <div id="test_status_disabled" class="chip" style="display:none"></div>
           </div>
@@ -1010,6 +1012,8 @@
           <button onclick="importAccounts()">批量导入</button>
           <button class="btn-secondary" onclick="exportAccounts()">导出所有账号</button>
           <button class="btn-secondary" onclick="exportAccounts(true)" id="export_selected_btn" style="display:none">导出选中</button>
+          <button class="btn-secondary" onclick="exportKiroGateJson()">导出 KiroGate JSON</button>
+          <button class="btn-secondary" onclick="exportKiroGateJson(true)" id="export_kirogate_selected_btn" style="display:none">导出选中 KiroGate JSON</button>
           <div id="import_status" class="chip" style="display:none"></div>
         </div>
 
@@ -2032,6 +2036,7 @@
       }
       
       document.getElementById('export_selected_btn_' + status).style.display = count > 0 ? 'inline-block' : 'none';
+      document.getElementById('export_kirogate_selected_btn_' + status).style.display = count > 0 ? 'inline-block' : 'none';
     }
 
     function toggleSelectAll(status) {
@@ -2622,6 +2627,63 @@
         a.href = url;
         const suffix = exportSelected ? `selected_${accounts.length}` : 'all';
         a.download = `accounts_${suffix}_${new Date().toISOString().split('T')[0]}.txt`;
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        alert('导出失败：' + e);
+      }
+    }
+
+    async function exportKiroGateJson(exportSelected = false, status = null) {
+      try {
+        const r = await authFetch('/v2/accounts');
+        let accounts = await r.json();
+
+        if (exportSelected && status) {
+          const selectedIds = status === 'enabled' ? selectedIdsEnabled : selectedIdsDisabled;
+          if (selectedIds.size === 0) {
+            alert('请先选择要导出的账号');
+            return;
+          }
+          accounts = accounts.filter(acc => selectedIds.has(acc.id));
+        } else if (exportSelected) {
+          // 从批量导入区域触发，合并两个 set
+          const allSelected = new Set([...selectedIdsEnabled, ...selectedIdsDisabled]);
+          if (allSelected.size === 0) {
+            alert('请先选择要导出的账号');
+            return;
+          }
+          accounts = accounts.filter(acc => allSelected.has(acc.id));
+        }
+
+        // 只导出 amazonq 类型且有 refreshToken 的账号
+        const items = accounts
+          .filter(acc => (acc.type === 'amazonq' || !acc.type) && acc.refreshToken)
+          .map(acc => {
+            const item = { refreshToken: acc.refreshToken };
+            if (acc.clientId && acc.clientSecret) {
+              // IDC 模式
+              item.authType = 'idc';
+              item.clientId = acc.clientId;
+              item.clientSecret = acc.clientSecret;
+            } else {
+              item.authType = 'social';
+            }
+            return item;
+          });
+
+        if (items.length === 0) {
+          alert('没有可导出的 Amazon Q 账号（需要有 refreshToken）');
+          return;
+        }
+
+        const content = JSON.stringify(items, null, 2);
+        const blob = new Blob([content], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const suffix = exportSelected ? `selected_${items.length}` : `all_${items.length}`;
+        a.download = `kirogate_tokens_${suffix}_${new Date().toISOString().split('T')[0]}.json`;
         a.click();
         URL.revokeObjectURL(url);
       } catch (e) {
