@@ -47,11 +47,12 @@ def map_claude_model_to_amazonq(claude_model: str) -> str:
     """
     将 Claude 模型名称映射到 Amazon Q 支持的模型名称
 
-    映射规则：
-    - claude-sonnet-4.5 或 claude-sonnet-4-5 开头 → claude-sonnet-4.5
-    - claude-opus-4-5 或 claude-opus-4.5 开头 → claude-sonnet-4.5
-    - claude-haiku 开头 → claude-haiku-4.5
-    - 其他所有模型 → claude-sonnet-4
+    映射规则（对齐 kiro.rs 官方实现）：
+    - sonnet 含 4.6/4-6 → claude-sonnet-4.6
+    - 其他 sonnet → claude-sonnet-4.5
+    - opus 含 4.5/4-5 → claude-opus-4.5
+    - 其他 opus（含 4.6/4-6 或无版本号）→ claude-opus-4.6
+    - haiku → claude-haiku-4.5
 
     Args:
         claude_model: Claude 模型名称
@@ -59,22 +60,23 @@ def map_claude_model_to_amazonq(claude_model: str) -> str:
     Returns:
         str: Amazon Q 模型名称
     """
-    # 转换为小写进行匹配
     model_lower = claude_model.lower()
 
-    # 检查是否是 claude-sonnet-4.5 或 claude-sonnet-4-5 开头
-    if model_lower.startswith("claude-sonnet-4.5") or model_lower.startswith("claude-sonnet-4-5"):
+    if "sonnet" in model_lower:
+        if "4.6" in model_lower or "4-6" in model_lower:
+            return "claude-sonnet-4.6"
         return "claude-sonnet-4.5"
 
-    # 检查是否是 claude-opus-4-5 或 claude-opus-4.5 开头 - 映射到 claude-sonnet-4.5
-    if model_lower.startswith("claude-opus-4-5") or model_lower.startswith("claude-opus-4.5"):
-        return "claude-sonnet-4.5"
+    if "opus" in model_lower:
+        if "4.5" in model_lower or "4-5" in model_lower:
+            return "claude-opus-4.5"
+        return "claude-opus-4.6"
 
-    if model_lower.startswith("claude-haiku"):
+    if "haiku" in model_lower:
         return "claude-haiku-4.5"
 
-    # 其他所有模型映射到 claude-sonnet-4
-    return "claude-sonnet-4"
+    # 未知模型默认走 sonnet-4.5
+    return "claude-sonnet-4.5"
 
 
 def extract_tool_uses_from_messages(messages: List[Any]) -> Dict[str, Dict[str, Any]]:

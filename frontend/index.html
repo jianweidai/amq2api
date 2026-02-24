@@ -964,8 +964,10 @@
           
           <!-- 快捷添加按钮 -->
           <div class="row" style="margin-bottom:12px">
+            <button type="button" class="btn-secondary" onclick="addQuickMapping('claude-sonnet-4-6', 'claude-sonnet-4.6')">+ Sonnet 4.6</button>
             <button type="button" class="btn-secondary" onclick="addQuickMapping('claude-sonnet-4-5-20250929', 'claude-sonnet-4-5')">+ Sonnet 4.5</button>
             <button type="button" class="btn-secondary" onclick="addQuickMapping('claude-haiku-4-5-20251001', 'claude-haiku-4-5')">+ Haiku 4.5</button>
+            <button type="button" class="btn-secondary" onclick="addQuickMapping('claude-opus-4-6', 'claude-opus-4.6')">+ Opus 4.6</button>
             <button type="button" class="btn-secondary" onclick="addQuickMapping('claude-opus-4-5-20251101', 'claude-opus-4-5')">+ Opus 4.5</button>
           </div>
           
@@ -2293,8 +2295,10 @@
       html += '<h4 style="margin:0 0 8px 0;font-size:15px">🔄 模型映射（可选）</h4>';
       html += '<p style="color:var(--muted);font-size:12px;margin-bottom:12px">配置模型映射关系。左侧是客户端请求的模型，右侧是实际发送给API的模型。</p>';
       html += '<div style="display:flex;gap:8px;margin-bottom:12px">';
+      html += '<button type="button" onclick="addQuickMapping(\'claude-sonnet-4-6\', \'claude-sonnet-4.6\')" style="padding:6px 12px;border-radius:8px;border:none;background:var(--muted);color:white;cursor:pointer;font-size:12px">+ Sonnet 4.6</button>';
       html += '<button type="button" onclick="addQuickMapping(\'claude-sonnet-4-5-20250929\', \'claude-sonnet-4-5\')" style="padding:6px 12px;border-radius:8px;border:none;background:var(--muted);color:white;cursor:pointer;font-size:12px">+ Sonnet 4.5</button>';
       html += '<button type="button" onclick="addQuickMapping(\'claude-haiku-4-5-20251001\', \'claude-haiku-4-5\')" style="padding:6px 12px;border-radius:8px;border:none;background:var(--muted);color:white;cursor:pointer;font-size:12px">+ Haiku 4.5</button>';
+      html += '<button type="button" onclick="addQuickMapping(\'claude-opus-4-6\', \'claude-opus-4.6\')" style="padding:6px 12px;border-radius:8px;border:none;background:var(--muted);color:white;cursor:pointer;font-size:12px">+ Opus 4.6</button>';
       html += '<button type="button" onclick="addQuickMapping(\'claude-opus-4-5-20251101\', \'claude-opus-4-5\')" style="padding:6px 12px;border-radius:8px;border:none;background:var(--muted);color:white;cursor:pointer;font-size:12px">+ Opus 4.5</button>';
       html += '</div>';
       html += '<div id="edit_mapping_list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"></div>';
