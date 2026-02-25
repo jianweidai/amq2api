@@ -218,6 +218,9 @@
         <button class="btn-warning" onclick="testSelectedAccounts()" id="test_selected_btn" style="display:none">测试选中</button>
         <button class="btn-warning" onclick="testAllAccounts()">测试所有账号</button>
         <button class="btn-warning" onclick="refreshAllTokens()">批量刷新 Token</button>
+        <select id="test_model" style="max-width:200px">
+          <option value="">自动选择模型</option>
+        </select>
         <input id="test_message" placeholder="测试消息" value="Hello" style="max-width:200px" />
         <div id="test_status" class="chip" style="display:none"></div>
       </div>
@@ -512,6 +515,12 @@ function renderAccounts(list) {
       quotaBtn.textContent = '查看配额';
       quotaBtn.onclick = () => viewQuota(acc.id);
       actions.appendChild(quotaBtn);
+
+      const reactivateBtn = document.createElement('button');
+      reactivateBtn.className = 'btn-warning';
+      reactivateBtn.textContent = '重新激活';
+      reactivateBtn.onclick = () => reactivateGeminiAccount(acc.id, acc.label);
+      actions.appendChild(reactivateBtn);
     }
 
     const rateLimitBtn = document.createElement('button');
@@ -972,11 +981,12 @@ async function testSingleAccount(accountId) {
     const adminKey = getAdminKey();
     if (adminKey) headers['x-api-key'] = adminKey;
 
+    const selectedModel = getSelectedTestModel(acc.type);
     const r = await fetch(endpoint, {
       method: 'POST',
       headers,
       body: JSON.stringify({
-        model: acc.type === 'gemini' ? 'gemini-3-pro-high' : 'claude-sonnet-4',
+        model: selectedModel,
         max_tokens: 50,
         messages: [{ role: 'user', content: msg }]
       })
@@ -1048,11 +1058,12 @@ async function testSelectedAccounts() {
       const adminKey = getAdminKey();
       if (adminKey) headers['x-api-key'] = adminKey;
 
+      const selectedModel = getSelectedTestModel(acc.type);
       const r = await fetch(endpoint, {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          model: acc.type === 'gemini' ? 'gemini-3-pro-high' : 'claude-sonnet-4',
+          model: selectedModel,
           max_tokens: 50,
           messages: [{ role: 'user', content: msg }]
         })
@@ -1129,11 +1140,12 @@ async function testAllAccounts() {
       const adminKey = getAdminKey();
       if (adminKey) headers['x-api-key'] = adminKey;
 
+      const selectedModel = getSelectedTestModel(acc.type);
       const r = await fetch(endpoint, {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          model: acc.type === 'gemini' ? 'gemini-3-pro-high' : 'claude-sonnet-4',
+          model: selectedModel,
           max_tokens: 50,
           messages: [{ role: 'user', content: msg }]
         })
@@ -1495,8 +1507,91 @@ async function configureRateLimit(acc) {
   };
 }
 
+async function reactivateGeminiAccount(accountId, label) {
+  if (!confirm(`确认重新激活账号 "${label || accountId.substring(0,8)}"？\n\n这将重新获取 Project ID 并更新 Access Token。`)) {
+    return;
+  }
+
+  setTestStatus(`正在重新激活 ${label}...`, true);
+
+  try {
+    const r = await authFetch(`/v2/accounts/${accountId}/reactivate`, { method: 'POST' });
+    if (!r.ok) {
+      const errText = await r.text();
+      throw new Error(errText);
+    }
+
+    const data = await r.json();
+    setTestStatus(`激活成功`, true);
+    alert(`账号 "${label}" 重新激活成功！\n\n新 Project ID: ${data.project_id}`);
+
+    // 刷新账号列表
+    await loadAccounts();
+  } catch(e) {
+    setTestStatus(`激活失败`, false);
+    alert(`重新激活失败：${e.message}`);
+  }
+}
+
+async function loadTestModels() {
+  try {
+    const r = await authFetch('/v2/config');
+    if (!r.ok) return;
+    const config = await r.json();
+
+    const select = document.getElementById('test_model');
+    select.innerHTML = '<option value="">自动选择模型</option>';
+
+    // 添加 Amazon Q 模型 (排除 gemini_only)
+    const geminiOnly = new Set(config.gemini_only_models || []);
+    const amazonqModels = (config.supported_models || []).filter(m => !geminiOnly.has(m));
+
+    if (amazonqModels.length > 0) {
+      const amazonqGroup = document.createElement('optgroup');
+      amazonqGroup.label = 'Amazon Q 模型';
+      amazonqModels.forEach(model => {
+        const opt = document.createElement('option');
+        opt.value = `amazonq:${model}`;
+        opt.textContent = model;
+        amazonqGroup.appendChild(opt);
+      });
+      select.appendChild(amazonqGroup);
+    }
+
+    // 添加 Gemini 模型 (排除 amazonq_only)
+    const amazonqOnly = new Set(config.amazonq_only_models || []);
+    const geminiModels = (config.supported_models || []).filter(m => !amazonqOnly.has(m));
+
+    if (geminiModels.length > 0) {
+      const geminiGroup = document.createElement('optgroup');
+      geminiGroup.label = 'Gemini 模型';
+      geminiModels.forEach(model => {
+        const opt = document.createElement('option');
+        opt.value = `gemini:${model}`;
+        opt.textContent = model;
+        geminiGroup.appendChild(opt);
+      });
+      select.appendChild(geminiGroup);
+    }
+  } catch(e) {
+    console.error('加载测试模型列表失败:', e);
+  }
+}
+
+function getSelectedTestModel(accountType) {
+  const selected = document.getElementById('test_model').value;
+  if (!selected) {
+    // 自动选择: 根据账号类型返回默认模型
+    return accountType === 'gemini' ? 'gemini-3-pro-high' : 'claude-sonnet-4';
+  }
+
+  const [type, model] = selected.split(':');
+  return model;
+}
+
 window.addEventListener('DOMContentLoaded', () => {
   loadAccounts();
+  loadTestModels();
 });
 </script>
 </body>

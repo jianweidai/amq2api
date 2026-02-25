@@ -12,4 +12,4 @@ class GeminiRequest:
     request_id: str
     request: Dict[str, Any]
     model: str
-    user_agent: str = "antigravity/1.11.3 darwin/arm64"
+    user_agent: str = "antigravity/1.15.8 linux/arm64"

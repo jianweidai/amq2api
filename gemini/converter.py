@@ -244,13 +244,14 @@ def convert_claude_to_gemini(claude_req: ClaudeRequest, project: str) -> Dict[st
         "requestType": "agent"
     }
 
+    system_parts = [{
+                        "text": "You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.**Absolute paths only****Proactiveness**"}]
     # 添加 system instruction
     if claude_req.system:
-        system_parts = []
         # 处理 system 字段（可能是字符串或列表）
         if isinstance(claude_req.system, str):
             # 简单字符串格式
-            system_parts = [{"text": claude_req.system}]
+            system_parts.append({"text": claude_req.system})
         elif isinstance(claude_req.system, list):
             # 列表格式，提取所有 text 内容
             for item in claude_req.system:
@@ -259,10 +260,10 @@ def convert_claude_to_gemini(claude_req: ClaudeRequest, project: str) -> Dict[st
         # else:
         #     system_parts = [{"text": str(claude_req.system)}]
 
-        gemini_request["request"]["systemInstruction"] = {
-            "role": "user",
-            "parts": system_parts
-        }
+    gemini_request["request"]["systemInstruction"] = {
+        "role": "user",
+        "parts": system_parts
+    }
 
     # 添加工具
     if claude_req.tools:
@@ -468,14 +469,47 @@ def clean_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
         "exclusiveMinimum": "exclusiveMinimum"
     }
 
-    # 需要完全移除的字段
-    fields_to_remove = {"$schema", "additionalProperties"}
+    # 需要完全移除的字段（Gemini 不支持这些 JSON Schema 扩展）
+    fields_to_remove = {
+        "$schema", "additionalProperties", "propertyNames", "patternProperties",
+        "unevaluatedProperties", "const", "anyOf", "oneOf", "allOf", "not",
+        "$ref", "$defs", "definitions", "if", "then", "else", "dependentSchemas",
+        "dependentRequired", "prefixItems", "contains", "unevaluatedItems"
+    }
 
     # 收集验证信息
     validations = []
     for field, label in validation_fields.items():
         if field in schema:
             validations.append(f"{label}: {schema[field]}")
+
+    # 处理 const: 将其值添加到 description
+    if "const" in schema:
+        const_value = schema["const"]
+        validations.append(f"must be exactly: {const_value}")
+
+    # 处理 anyOf/oneOf: 提取类型信息添加到 description
+    for combo_field in ["anyOf", "oneOf", "allOf"]:
+        if combo_field in schema:
+            combo_types = []
+            for item in schema[combo_field]:
+                if isinstance(item, dict):
+                    if "type" in item:
+                        combo_types.append(str(item["type"]))
+                    elif "const" in item:
+                        combo_types.append(f"'{item['const']}'")
+            if combo_types:
+                validations.append(f"{combo_field}: {' | '.join(combo_types)}")
+
+    # 处理 type 为数组的情况 (例如 ["string", "null"])
+    schema_type = schema.get("type")
+    if isinstance(schema_type, list):
+        # 取第一个非 null 的类型
+        primary_type = next((t for t in schema_type if t != "null"), schema_type[0] if schema_type else "string")
+        if "null" in schema_type:
+            validations.append("nullable")
+        schema = dict(schema)
+        schema["type"] = primary_type
 
     # 递归清理 schema
     cleaned = {}
@@ -486,6 +520,10 @@ def clean_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
         if key == "description" and validations:
             # 将验证要求追加到 description
             cleaned[key] = f"{value} ({', '.join(validations)})"
+        elif key == "type" and isinstance(value, list):
+            # 已在上面处理过
+            primary_type = next((t for t in value if t != "null"), value[0] if value else "string")
+            cleaned[key] = primary_type
         elif isinstance(value, dict):
             cleaned[key] = clean_json_schema(value)
         elif isinstance(value, list):

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Gemini OAuth 凭证获取客户端
-独立脚本，用于获取 Gemini 的 client_id, client_secret, refresh_token
+独立脚本，用于获取 Gemini 的 client_id, client_secret, refresh_token, project_id
 """
 import asyncio
 import webbrowser
@@ -9,6 +9,12 @@ from aiohttp import web
 import secrets
 from urllib.parse import urlencode
 import httpx
+import sys
+import os
+
+# 添加项目根目录到 path，以便导入 GeminiTokenManager
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from gemini.auth import GeminiTokenManager
 
 # Antigravity 应用的 OAuth 配置
 GOOGLE_CLIENT_ID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
@@ -16,6 +22,9 @@ GOOGLE_CLIENT_SECRET = "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"
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 CALLBACK_PORT = 63902
+
+# 与 donate 页面一致的 API endpoint（sandbox 环境）
+GEMINI_API_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com"
 
 SCOPES = [
     "https://www.googleapis.com/auth/cloud-platform",
@@ -166,7 +175,33 @@ async def main():
     try:
         tokens = await exchange_code_for_tokens(auth_code, GOOGLE_CLIENT_SECRET)
 
+        refresh_token = tokens.get('refresh_token')
+        if not refresh_token:
+            print("❌ 未获取到 refresh_token")
+            return
+
         print("✓ 成功获取 tokens!")
+        print()
+
+        # 步骤 3: 验证账号可用性并获取 Project ID（与 donate 逻辑一致）
+        print("步骤 3: 验证账号可用性...")
+        print("-" * 60)
+
+        token_manager = GeminiTokenManager(
+            client_id=GOOGLE_CLIENT_ID,
+            client_secret=GOOGLE_CLIENT_SECRET,
+            refresh_token=refresh_token,
+            api_endpoint=GEMINI_API_ENDPOINT
+        )
+
+        try:
+            project_id = await token_manager.get_project_id()
+            print(f"✓ 账号验证成功!")
+        except Exception as e:
+            print(f"❌ 账号验证失败: {e}")
+            print("  凭证可能无效或账号不可用")
+            return
+
         print()
         print("=" * 60)
         print("凭证信息")
@@ -179,10 +214,16 @@ async def main():
         print(f"  {GOOGLE_CLIENT_SECRET}")
         print()
         print(f"Refresh Token:")
-        print(f"  {tokens.get('refresh_token', '未获取到 refresh_token')}")
+        print(f"  {refresh_token}")
+        print()
+        print(f"Project ID:")
+        print(f"  {project_id}")
+        print()
+        print(f"API Endpoint:")
+        print(f"  {GEMINI_API_ENDPOINT}")
         print()
         print(f"Access Token:")
-        print(f"  {tokens.get('access_token', 'N/A')}...")
+        print(f"  {tokens.get('access_token', 'N/A')[:50]}...")
         print()
         print(f"Expires In:")
         print(f"  {tokens.get('expires_in', 'N/A')} 秒")
@@ -197,9 +238,11 @@ async def main():
             credentials = {
                 "client_id": GOOGLE_CLIENT_ID,
                 "client_secret": GOOGLE_CLIENT_SECRET,
-                "refresh_token": tokens.get('refresh_token'),
+                "refresh_token": refresh_token,
                 "access_token": tokens.get('access_token'),
-                "expires_in": tokens.get('expires_in')
+                "expires_in": tokens.get('expires_in'),
+                "project_id": project_id,
+                "api_endpoint": GEMINI_API_ENDPOINT
             }
 
             filename = "gemini_credentials.json"
