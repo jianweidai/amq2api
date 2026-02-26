@@ -292,11 +292,32 @@ async def health():
         }
 
 
+@app.get("/v1/models")
+async def list_models():
+    """列出所有可用模型，返回 OpenAI 兼容格式"""
+    from src.auth.account_manager import get_config
+    amazonq_only = get_config("amazonq_only_models") or []
+    supported = get_config("supported_models") or []
+    all_models = sorted(set(amazonq_only + supported))
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": model,
+                "object": "model",
+                "created": 1677610602,
+                "owned_by": "amazon-q" if model in amazonq_only else "gemini"
+            }
+            for model in all_models
+        ]
+    }
+
+
 @app.get("/admin/cache/stats")
 async def get_cache_stats():
     """
     阶段 2: 获取缓存统计信息和内存使用情况
-    
+
     Returns:
         缓存统计信息，包括命中率、内存使用等
     """
@@ -1662,6 +1683,34 @@ async def get_account_stats(account_id: str, _: bool = Depends(verify_admin_key)
     except Exception as e:
         logger.error(f"获取账号统计失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取账号统计失败: {str(e)}")
+
+
+@app.get("/v2/config")
+async def get_config_endpoint(_: bool = Depends(verify_admin_key)):
+    """获取所有模型配置"""
+    from src.auth.account_manager import get_all_config
+    return JSONResponse(content=get_all_config())
+
+
+@app.put("/v2/config")
+async def update_config_endpoint(request: Request, _: bool = Depends(verify_admin_key)):
+    """更新模型配置（支持部分更新）"""
+    from src.auth.account_manager import set_config, get_all_config
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="无效的 JSON 请求体")
+
+    allowed_keys = {"gemini_only_models", "amazonq_only_models", "supported_models", "model_mapping"}
+    updated = []
+    for key, value in body.items():
+        if key not in allowed_keys:
+            raise HTTPException(status_code=400, detail=f"不允许的配置项: {key}，允许的项: {sorted(allowed_keys)}")
+        set_config(key, value)
+        updated.append(key)
+
+    logger.info(f"模型配置已更新: {updated}")
+    return JSONResponse(content={"updated": updated, "config": get_all_config()})
 
 
 @app.post("/v2/accounts/{account_id}/test")

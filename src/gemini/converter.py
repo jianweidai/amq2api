@@ -83,19 +83,46 @@ def convert_claude_to_gemini(claude_req: ClaudeRequest, project: str) -> Dict[st
     Returns:
         Gemini 请求字典
     """
+    # 第一步：构建 tool_use_id -> tool_name 的映射（用于 tool_result 缺少 name 时查找）
+    tool_id_to_name = {}
+    for msg in claude_req.messages:
+        if isinstance(msg.content, list):
+            for item in msg.content:
+                if isinstance(item, dict) and item.get("type") == "tool_use":
+                    tool_id = item.get("id")
+                    tool_name = item.get("name")
+                    if tool_id and tool_name:
+                        tool_id_to_name[tool_id] = tool_name
+
     # 转换消息格式
     contents = []
     for msg in claude_req.messages:
         role = "user" if msg.role == "user" else "model"
 
+        # 检测并修复只有 thinking 没有实质内容的 assistant 消息
+        # 注意：不直接修改 msg.content，避免原地修改 pydantic 对象
+        content = msg.content
+        if role == "model" and isinstance(content, list):
+            has_thinking = any(
+                isinstance(item, dict) and item.get("type") == "thinking"
+                for item in content
+            )
+            has_text = any(
+                isinstance(item, dict) and item.get("type") != "thinking"
+                for item in content
+            )
+            if has_thinking and not has_text:
+                logger.info("检测到只有 thinking 没有实质内容的 assistant 消息，添加提示文本")
+                content = list(content) + [{"type": "text", "text": "继续"}]
+
         # 处理 content
-        if isinstance(msg.content, str):
-            parts = [{"text": msg.content}]
-        elif isinstance(msg.content, list):
+        if isinstance(content, str):
+            parts = [{"text": content}]
+        elif isinstance(content, list):
             parts = []
             pending_signature = None  # 保存待附加的 signature
 
-            for i, item in enumerate(msg.content):
+            for i, item in enumerate(content):
                 if isinstance(item, dict):
                     item_type = item.get("type")
                     if item_type == "thinking":
@@ -140,9 +167,9 @@ def convert_claude_to_gemini(claude_req: ClaudeRequest, project: str) -> Dict[st
                         parts.append(part)
                     elif item.get("type") == "tool_result":
                         # 处理工具结果
-                        content = item.get("content", "")
-                        if isinstance(content, list):
-                            content = content[0].get("text", "") if content else ""
+                        tool_content = item.get("content", "")
+                        if isinstance(tool_content, list):
+                            tool_content = tool_content[0].get("text", "") if tool_content else ""
                         # 获取 tool_use_id 对应的 name
                         tool_use_id = item.get("tool_use_id")
                         # 优先使用 item 中的 name，如果没有则从映射中查找
@@ -153,7 +180,7 @@ def convert_claude_to_gemini(claude_req: ClaudeRequest, project: str) -> Dict[st
                             "functionResponse": {
                                 "id": tool_use_id,
                                 "name": tool_name,
-                                "response": {"output": content}
+                                "response": {"output": tool_content}
                             }
                         })
                 else:
@@ -166,7 +193,7 @@ def convert_claude_to_gemini(claude_req: ClaudeRequest, project: str) -> Dict[st
                     "thoughtSignature": pending_signature
                 })
         else:
-            parts = [{"text": str(msg.content)}]
+            parts = [{"text": str(content)}]
 
         # 跳过空 parts 的消息，避免 Gemini 400 错误
         if not parts:
@@ -181,6 +208,11 @@ def convert_claude_to_gemini(claude_req: ClaudeRequest, project: str) -> Dict[st
     # 重新组织消息，确保 tool_use 后紧跟对应的 tool_result
     # contents = reorganize_tool_messages(contents)
 
+    # 计算 maxOutputTokens：需要包含 thinking budget
+    think_config = get_thinking_config(claude_req.thinking)
+    thinking_budget = think_config.get("thinkingBudget", 0) or 0
+    max_output_tokens = max(claude_req.max_tokens, thinking_budget) + 1
+
     # 构建 Gemini 请求
     gemini_request = {
         "project": project,
@@ -192,9 +224,9 @@ def convert_claude_to_gemini(claude_req: ClaudeRequest, project: str) -> Dict[st
                 "topP": 1,
                 "topK": 40,
                 "candidateCount": 1,
-                "maxOutputTokens": claude_req.max_tokens,
+                "maxOutputTokens": max_output_tokens,
                 "stopSequences": ["<|user|>", "<|bot|>", "<|context_request|>", "<|endoftext|>", "<|end_of_turn|>"],
-                "thinkingConfig": get_thinking_config(claude_req.thinking)
+                "thinkingConfig": think_config
             },
             "sessionId": "-3750763034362895578",
         },
@@ -246,20 +278,17 @@ def map_claude_model_to_gemini(claude_model: str) -> str:
     Returns:
         Gemini 模型名称
     """
-    # 支持的所有模型（直接透传）
-    supported_models = {
+    from src.auth.account_manager import get_all_config
+
+    # 一次性读取所有配置，避免多次 DB 查询
+    all_config = get_all_config()
+    supported_models = all_config.get("supported_models") or [
         "gemini-2.5-flash", "gemini-2.5-flash-thinking", "gemini-2.5-pro",
         "gemini-3-pro-low", "gemini-3-pro-high", "gemini-2.5-flash-lite",
-        "gemini-2.5-flash-image", "gemini-2.5-flash-image",
-        "claude-sonnet-4-5", "claude-sonnet-4-5-thinking", "claude-opus-4-5-thinking",
-        "gpt-oss-120b-medium"
-    }
-
-    if claude_model in supported_models:
-        return claude_model
-
-    # Claude 标准模型名称映射
-    model_mapping = {
+        "gemini-2.5-flash-image", "claude-sonnet-4-5", "claude-sonnet-4-5-thinking",
+        "claude-opus-4-5-thinking", "gpt-oss-120b-medium"
+    ]
+    model_mapping = all_config.get("model_mapping") or {
         "claude-sonnet-4.5": "claude-sonnet-4-5",
         "claude-3-5-sonnet-20241022": "claude-sonnet-4-5",
         "claude-3-5-sonnet-20240620": "claude-sonnet-4-5",
@@ -267,6 +296,9 @@ def map_claude_model_to_gemini(claude_model: str) -> str:
         "claude-haiku-4": "claude-haiku-4.5",
         "claude-3-haiku-20240307": "gemini-2.5-flash"
     }
+
+    if claude_model in supported_models:
+        return claude_model
 
     return model_mapping.get(claude_model, "claude-sonnet-4-5")
 
@@ -437,6 +469,8 @@ def clean_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
         "maximum": "maximum",
         "minItems": "minItems",
         "maxItems": "maxItems",
+        "exclusiveMaximum": "exclusiveMaximum",
+        "exclusiveMinimum": "exclusiveMinimum",
     }
 
     # 需要完全移除的字段
