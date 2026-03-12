@@ -876,6 +876,44 @@
 
         <div class="divider"></div>
 
+        <!-- AMQ 模型映射全局开关 -->
+        <div style="margin-bottom:20px;padding:16px;background:var(--bg);border-radius:12px;display:flex;align-items:center;gap:12px">
+          <label class="switch">
+            <input id="enable_model_mapping_toggle" type="checkbox" checked onchange="toggleModelMapping(this.checked)" />
+            <span class="slider"></span>
+          </label>
+          <div>
+            <span style="font-weight:600;color:var(--text)">🔄 AMQ 模型映射</span>
+            <p style="color:var(--muted);font-size:12px;margin:2px 0 0">开启后，全局模型映射规则生效；关闭后所有映射跳过，使用原始模型名称</p>
+          </div>
+          <span id="model_mapping_status" style="margin-left:auto;font-size:12px;color:var(--muted)"></span>
+        </div>
+
+        <!-- AMQ 全局模型映射编辑 -->
+        <div id="amq_mapping_editor" style="margin-bottom:20px;padding:16px;background:var(--bg);border-radius:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <div>
+              <span style="font-weight:600;color:var(--text)">📝 全局映射规则</span>
+              <p style="color:var(--muted);font-size:12px;margin:2px 0 0">配置请求模型到目标模型的映射关系，不在列表中的模型使用原始名称</p>
+            </div>
+          </div>
+          <!-- 快捷添加 -->
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+            <button type="button" class="btn-secondary" style="font-size:12px;padding:4px 10px" onclick="addAmqMappingRow('claude-opus-4','claude-sonnet-4.5')">+ opus-4 → sonnet-4.5</button>
+            <button type="button" class="btn-secondary" style="font-size:12px;padding:4px 10px" onclick="addAmqMappingRow('claude-opus-4.5','claude-sonnet-4.5')">+ opus-4.5 → sonnet-4.5</button>
+            <button type="button" class="btn-secondary" style="font-size:12px;padding:4px 10px" onclick="addAmqMappingRow('claude-sonnet-4.6','claude-sonnet-4.5')">+ sonnet-4.6 → sonnet-4.5</button>
+            <button type="button" class="btn-secondary" style="font-size:12px;padding:4px 10px" onclick="addAmqMappingRow('claude-sonnet-4-6','claude-sonnet-4.5')">+ sonnet-4-6 → sonnet-4.5</button>
+          </div>
+          <!-- 映射列表 -->
+          <div id="amq_mapping_list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"></div>
+          <!-- 操作按钮 -->
+          <div style="display:flex;gap:8px;align-items:center">
+            <button type="button" class="btn-secondary" onclick="addAmqMappingRow('','')">➕ 添加映射</button>
+            <button type="button" onclick="saveAmqMapping()" style="font-size:13px">💾 保存映射</button>
+            <span id="amq_mapping_save_status" style="font-size:12px;color:var(--muted)"></span>
+          </div>
+        </div>
+
         <h3>创建新账号</h3>
         <div class="row">
           <div class="field" style="max-width:200px">
@@ -1649,6 +1687,116 @@
     }
 
     // ============== 结束模型映射管理函数 ==============
+
+    // ===== AMQ 模型映射开关 =====
+    async function loadModelMappingToggle() {
+      try {
+        const r = await authFetch('/v2/config');
+        if (r.ok) {
+          const config = await r.json();
+          const enabled = config.enable_model_mapping !== false;
+          document.getElementById('enable_model_mapping_toggle').checked = enabled;
+          document.getElementById('model_mapping_status').textContent = enabled ? '已开启' : '已关闭';
+          document.getElementById('model_mapping_status').style.color = enabled ? 'var(--success)' : 'var(--muted)';
+          // 加载映射规则
+          loadAmqMappingEditor(config.amq_model_mapping || {});
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    async function toggleModelMapping(enabled) {
+      const statusEl = document.getElementById('model_mapping_status');
+      statusEl.textContent = '保存中...';
+      try {
+        const r = await authFetch('/v2/config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enable_model_mapping: enabled })
+        });
+        if (r.ok) {
+          statusEl.textContent = enabled ? '已开启' : '已关闭';
+          statusEl.style.color = enabled ? 'var(--success)' : 'var(--muted)';
+        } else {
+          statusEl.textContent = '保存失败';
+          statusEl.style.color = 'var(--danger)';
+          document.getElementById('enable_model_mapping_toggle').checked = !enabled;
+        }
+      } catch (e) {
+        statusEl.textContent = '网络错误';
+        statusEl.style.color = 'var(--danger)';
+        document.getElementById('enable_model_mapping_toggle').checked = !enabled;
+      }
+    }
+
+    // ===== AMQ 全局映射编辑器 =====
+    function loadAmqMappingEditor(mapping) {
+      const list = document.getElementById('amq_mapping_list');
+      list.innerHTML = '';
+      for (const [from, to] of Object.entries(mapping)) {
+        _appendAmqMappingRow(from, to);
+      }
+    }
+
+    function addAmqMappingRow(from, to) {
+      // 检查是否已存在相同的 from
+      const rows = document.querySelectorAll('#amq_mapping_list .amq-map-row');
+      for (const row of rows) {
+        const inputs = row.querySelectorAll('input');
+        if (inputs[0].value === from && from !== '') {
+          inputs[0].style.outline = '2px solid var(--warning)';
+          setTimeout(() => inputs[0].style.outline = '', 1500);
+          return;
+        }
+      }
+      _appendAmqMappingRow(from, to);
+    }
+
+    function _appendAmqMappingRow(from, to) {
+      const list = document.getElementById('amq_mapping_list');
+      const row = document.createElement('div');
+      row.className = 'amq-map-row';
+      row.style.cssText = 'display:flex;gap:8px;align-items:center';
+      row.innerHTML = `
+        <input type="text" value="${from}" placeholder="请求模型" style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--text);font-size:13px" />
+        <span style="color:var(--muted);font-size:14px">→</span>
+        <input type="text" value="${to}" placeholder="目标模型" style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--text);font-size:13px" />
+        <button type="button" onclick="this.parentElement.remove()" style="background:var(--danger);color:white;border:none;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12px">✕</button>
+      `;
+      list.appendChild(row);
+    }
+
+    async function saveAmqMapping() {
+      const statusEl = document.getElementById('amq_mapping_save_status');
+      statusEl.textContent = '保存中...';
+      statusEl.style.color = 'var(--muted)';
+      const mapping = {};
+      const rows = document.querySelectorAll('#amq_mapping_list .amq-map-row');
+      for (const row of rows) {
+        const inputs = row.querySelectorAll('input');
+        const from = inputs[0].value.trim();
+        const to = inputs[1].value.trim();
+        if (from && to) mapping[from] = to;
+      }
+      try {
+        const r = await authFetch('/v2/config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ amq_model_mapping: mapping })
+        });
+        if (r.ok) {
+          statusEl.textContent = '✅ 已保存';
+          statusEl.style.color = 'var(--success)';
+          setTimeout(() => statusEl.textContent = '', 3000);
+        } else {
+          const err = await r.json().catch(() => ({}));
+          statusEl.textContent = '❌ ' + (err.detail || '保存失败');
+          statusEl.style.color = 'var(--danger)';
+        }
+      } catch (e) {
+        statusEl.textContent = '❌ 网络错误';
+        statusEl.style.color = 'var(--danger)';
+      }
+    }
 
     function setHealth(text, ok = true) {
       const el = document.getElementById('health');
@@ -3360,6 +3508,7 @@
       setupLoginKeyboardSupport();
       initAuth();
       initPeriodSelector();
+      loadModelMappingToggle();
     });
   </script>
 </body>

@@ -216,6 +216,14 @@ def _sqlite_init_default_config(conn):
             "claude-opus-4": "gemini-3-pro-high",
             "claude-haiku-4": "claude-haiku-4.5",
             "claude-3-haiku-20240307": "gemini-2.5-flash"
+        }),
+        "enable_model_mapping": json.dumps(True),
+        "amq_model_mapping": json.dumps({
+            "claude-opus-4": "claude-sonnet-4.5",
+            "claude-opus-4-5": "claude-sonnet-4.5",
+            "claude-opus-4.5": "claude-sonnet-4.5",
+            "claude-sonnet-4-6": "claude-sonnet-4.5",
+            "claude-sonnet-4.6": "claude-sonnet-4.5"
         })
     }
     for key, value in defaults.items():
@@ -364,6 +372,14 @@ def _mysql_init_default_config(cursor):
             "claude-opus-4": "gemini-3-pro-high",
             "claude-haiku-4": "claude-haiku-4.5",
             "claude-3-haiku-20240307": "gemini-2.5-flash"
+        }),
+        "enable_model_mapping": json.dumps(True),
+        "amq_model_mapping": json.dumps({
+            "claude-opus-4": "claude-sonnet-4.5",
+            "claude-opus-4-5": "claude-sonnet-4.5",
+            "claude-opus-4.5": "claude-sonnet-4.5",
+            "claude-sonnet-4-6": "claude-sonnet-4.5",
+            "claude-sonnet-4.6": "claude-sonnet-4.5"
         })
     }
     for key, value in defaults.items():

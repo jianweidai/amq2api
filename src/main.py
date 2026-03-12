@@ -649,12 +649,13 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
             logger.error(f"Token 刷新失败: {e}")
             raise HTTPException(status_code=502, detail="Token 刷新失败")
 
-        # 应用模型映射（如果账号有配置）
+        # 应用全局 AMQ 模型映射
         if account:
             from src.processing.model_mapper import apply_model_mapping
             original_model = model
             model = apply_model_mapping(account, model)
             if model != original_model:
+                logger.info(f"[AMQ模型映射] {original_model} → {model} (账号: {account.get('label', 'N/A')})")
                 # 更新 claude_req 中的模型
                 claude_req.model = model
                 # 重新转换请求，保持相同的 conversationId
@@ -698,6 +699,9 @@ async def create_message(request: Request, _: bool = Depends(verify_api_key)):
                     codewhisperer_dict["conversationState"] = conversation_state
                 
                 final_request = codewhisperer_dict
+
+        # 打印最终请求模型
+        logger.info(f"[AMQ请求] 最终模型: {model}, 账号: {account.get('id', 'N/A')[:8]}... (label: {account.get('label', 'N/A')})")
 
         # 在发送请求前验证输入长度（仅对 Amazon Q，因为它的限制较严格）
         # 可以通过环境变量 AMAZONQ_MAX_INPUT_TOKENS 调整限制
@@ -1072,11 +1076,12 @@ async def create_gemini_message(request: Request, _: bool = Depends(verify_api_k
             update_account(account["id"], access_token=token_manager.access_token, other=other)
             logger.info(f"Gemini access token 已更新到数据库")
 
-        # 应用模型映射（如果账号有配置）
+        # 应用全局 AMQ 模型映射
         from src.processing.model_mapper import apply_model_mapping
         original_model = claude_req.model
         mapped_model = apply_model_mapping(account, original_model)
         if mapped_model != original_model:
+            logger.info(f"[Gemini模型映射] {original_model} → {mapped_model} (账号: {account.get('label', 'N/A')})")
             claude_req.model = mapped_model
 
 
@@ -1701,7 +1706,7 @@ async def update_config_endpoint(request: Request, _: bool = Depends(verify_admi
     except Exception:
         raise HTTPException(status_code=400, detail="无效的 JSON 请求体")
 
-    allowed_keys = {"gemini_only_models", "amazonq_only_models", "supported_models", "model_mapping"}
+    allowed_keys = {"gemini_only_models", "amazonq_only_models", "supported_models", "model_mapping", "enable_model_mapping", "amq_model_mapping"}
     updated = []
     for key, value in body.items():
         if key not in allowed_keys:
